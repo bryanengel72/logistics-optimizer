@@ -221,8 +221,8 @@ function RouteMap({
       >
         <defs>
           <radialGradient id="mapglow">
-            <stop stopColor="#283b30" stopOpacity=".5" />
-            <stop offset="1" stopColor="#101921" stopOpacity="0" />
+            <stop stopColor="#c2dfc4" stopOpacity=".5" />
+            <stop offset="1" stopColor="#e6eef4" stopOpacity="0" />
           </radialGradient>
           <filter id="routeglow">
             <feGaussianBlur stdDeviation="4" />
@@ -236,7 +236,7 @@ function RouteMap({
             <path
               d="M 35 0 L 0 0 0 35"
               fill="none"
-              stroke="#22303a"
+              stroke="#cbd9e4"
               strokeWidth=".35"
             />
           </pattern>
@@ -247,8 +247,8 @@ function RouteMap({
           <path
             key={s.name}
             d={s.path}
-            fill="#19242c"
-            stroke="#35434b"
+            fill="#f5f8fa"
+            stroke="#c5d3dd"
             strokeWidth=".85"
           />
         ))}
@@ -271,7 +271,7 @@ function RouteMap({
             key={t}
             x={x}
             y={y}
-            fill="#5e727d"
+            fill="#647c8d"
             fontSize="8"
             letterSpacing="1.7"
             textAnchor="middle"
@@ -287,7 +287,7 @@ function RouteMap({
             <g key={l.id} opacity={selected && selected !== l.id ? 0.4 : 1}>
               <path
                 d={d}
-                stroke="#c6ed89"
+                stroke="#337443"
                 fill="none"
                 strokeWidth="5"
                 opacity=".2"
@@ -295,7 +295,7 @@ function RouteMap({
               />
               <path
                 d={d}
-                stroke={i % 3 === 2 ? '#83bfb1' : '#c6ed89'}
+                stroke={i % 3 === 2 ? '#327d87' : '#337443'}
                 fill="none"
                 strokeWidth="2"
                 strokeDasharray={i > 3 ? '4 5' : undefined}
@@ -315,14 +315,14 @@ function RouteMap({
                   width="27"
                   height="20"
                   rx="5"
-                  fill="#c6ed89"
+                  fill="#337443"
                 />
                 <Truck
                   x={(x + a) / 2 - 8}
                   y={(y + b) / 2 - 21}
                   width="17"
                   height="16"
-                  color="#27361b"
+                  color="#ffffff"
                 />
               </g>
             </g>
@@ -338,23 +338,23 @@ function RouteMap({
           );
           return (
             <g key={city}>
-              <circle cx={x} cy={y} r="9" fill="#c6ed89" opacity=".12" />
+              <circle cx={x} cy={y} r="9" fill="#337443" opacity=".12" />
               <circle
                 cx={x}
                 cy={y}
                 r="3.5"
-                fill="#c6ed89"
-                stroke="#142019"
+                fill="#337443"
+                stroke="#ffffff"
                 strokeWidth="1.5"
               />
               <text
                 x={x + 9}
                 y={y - 8}
-                fill="#d0dce2"
+                fill="#29485c"
                 fontSize="10"
                 style={{
                   paintOrder: 'stroke',
-                  stroke: '#152129',
+                  stroke: '#f5f8fa',
                   strokeWidth: 3,
                 }}
               >
@@ -364,8 +364,8 @@ function RouteMap({
           );
         })}
         <g transform="translate(640 28)">
-          <path d="M0 -10 L-4 2 L0 0 L4 2 Z" fill="#b0c0cc" />
-          <text y="14" textAnchor="middle" fill="#7b8f9c" fontSize="9">
+          <path d="M0 -10 L-4 2 L0 0 L4 2 Z" fill="#415f73" />
+          <text y="14" textAnchor="middle" fill="#526b7d" fontSize="9">
             N
           </text>
         </g>
@@ -491,7 +491,10 @@ export default function Workspace() {
         setView(h);
       const onHash = () => {
         const h = decodeURIComponent(window.location.hash.slice(1));
-        if ([...nav.map(n=>n[0]),'Profile','Settings','Alerts'].includes(h)) setView(h);
+        if (
+          [...nav.map((n) => n[0]), 'Profile', 'Settings', 'Alerts'].includes(h)
+        )
+          setView(h);
       };
       onHash();
     }, 0);
@@ -948,7 +951,7 @@ export default function Workspace() {
             <span className="pill gray">
               <i
                 className="dot"
-                style={{ color: sync === 'Synced' ? '#c6ed89' : '#d6b779' }}
+                style={{ color: sync === 'Synced' ? '#337443' : '#a66a11' }}
               />
               {sync}
             </span>
@@ -1584,9 +1587,9 @@ export default function Workspace() {
               <div
                 className="notice-banner"
                 style={{
-                  background: '#18251b',
-                  borderColor: '#35432d',
-                  color: '#baceaa',
+                  background: '#edf6eb',
+                  borderColor: '#c9ddc5',
+                  color: '#365e33',
                 }}
               >
                 <span>
