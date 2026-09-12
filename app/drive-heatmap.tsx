@@ -42,7 +42,7 @@ export default function DriveHeatmap({
       : drivers.find((d) => d.email === driver)?.name || driver;
   return (
     <section className="panel" aria-label="Completed drives by month">
-      <div className="panel-head">
+      <div className="panel-head drives-head">
         <div>
           <h2>Completed drives</h2>
           <small>Delivered loads by month over the last year</small>

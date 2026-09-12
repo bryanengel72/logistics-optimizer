@@ -1083,8 +1083,17 @@ tr:last-child td {
     padding: 0 16px;
   }
   .breadcrumb > svg,
-  .breadcrumb > span:first-child {
+  .breadcrumb > span:first-of-type {
     display: none;
+  }
+  .breadcrumb {
+    white-space: nowrap;
+  }
+  .drives-head {
+    flex-wrap: wrap;
+  }
+  .drives-head .drives-pick {
+    width: 100%;
   }
   .top-actions {
     gap: 10px;
