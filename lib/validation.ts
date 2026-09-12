@@ -81,11 +81,22 @@ export function validateLoad(v: unknown): Load {
     ]),
     driver: typeof x.driver === 'string' ? x.driver.slice(0, 254) : '',
     notes: typeof x.notes === 'string' ? x.notes.slice(0, 2000) : '',
+    deliveredOn: isoDate(x.deliveredOn, 'Delivered on'),
     sample: x.sample === true,
   };
   if (x.version !== undefined)
     l.version = number(x.version, 'Version', 1, 1e9, true);
   return l;
+}
+function isoDate(v: unknown, label: string): string {
+  if (v === undefined || v === null || v === '') return '';
+  if (
+    typeof v !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(v) ||
+    Number.isNaN(new Date(`${v}T00:00:00Z`).getTime())
+  )
+    throw new InputError(`${label} must be a valid date.`);
+  return v;
 }
 export function validatePreferences(v: unknown): Preferences {
   if (!v || typeof v !== 'object') throw new InputError('Provide preferences.');

@@ -6,6 +6,10 @@ import {
   costs,
   optimize,
   distance,
+  deliveryDate,
+  stampDelivery,
+  monthlyDrives,
+  driveLevel,
 } from '../work/model/model.js';
 import { validateLoad, validatePreferences } from '../work/model/validation.js';
 const near = (a, b) => assert.ok(Math.abs(a - b) < 0.00001, `${a} ≠ ${b}`);
@@ -122,4 +126,108 @@ test('server validation rejects invalid finances, dates, coordinates and setting
   assert.throws(() => validatePreferences({ ...defaults, days: 0 }));
   assert.equal(validateLoad(l).order, l.order);
   assert.deepEqual(validatePreferences(defaults), defaults);
+});
+
+test('delivery date uses the recorded date and falls back to availability plus trip days', () => {
+  const l = {
+    ...seedLoads()[0],
+    status: 'Delivered',
+    date: '2026-03-30',
+    days: 3,
+  };
+  assert.equal(deliveryDate(l), '2026-04-01');
+  assert.equal(deliveryDate({ ...l, deliveredOn: '2026-04-05' }), '2026-04-05');
+  assert.equal(deliveryDate({ ...l, status: 'In transit' }), null);
+});
+test('stamping fills in the delivery date only for delivered loads', () => {
+  const l = seedLoads()[0];
+  assert.equal(
+    stampDelivery({ ...l, status: 'Delivered' }, '2026-09-12').deliveredOn,
+    '2026-09-12',
+  );
+  assert.equal(
+    stampDelivery(
+      { ...l, status: 'Delivered', deliveredOn: '2026-08-01' },
+      '2026-09-12',
+    ).deliveredOn,
+    '2026-08-01',
+  );
+  assert.equal(
+    stampDelivery(
+      { ...l, status: 'Available', deliveredOn: '2026-08-01' },
+      '2026-09-12',
+    ).deliveredOn,
+    '',
+  );
+});
+test('monthly drives bucket delivered loads for the last twelve months, oldest first', () => {
+  const base = seedLoads()[0];
+  const loads = [
+    {
+      ...base,
+      id: 'a',
+      status: 'Delivered',
+      deliveredOn: '2026-09-02',
+      driver: 'me@x.com',
+      miles: 100,
+      pay: 500,
+    },
+    {
+      ...base,
+      id: 'b',
+      status: 'Delivered',
+      deliveredOn: '2026-09-20',
+      driver: 'me@x.com',
+      miles: 200,
+      pay: 700,
+    },
+    {
+      ...base,
+      id: 'c',
+      status: 'Delivered',
+      deliveredOn: '2025-10-15',
+      driver: 'you@x.com',
+      miles: 50,
+      pay: 100,
+    },
+    {
+      ...base,
+      id: 'd',
+      status: 'Delivered',
+      deliveredOn: '2025-09-15',
+      driver: 'me@x.com',
+    },
+    { ...base, id: 'e', status: 'Available', driver: 'me@x.com' },
+  ];
+  const today = new Date('2026-09-12T12:00:00Z');
+  const all = monthlyDrives(loads, '', 12, today);
+  assert.equal(all.length, 12);
+  assert.equal(all[0].key, '2025-10');
+  assert.equal(all[11].key, '2026-09');
+  assert.equal(all[11].drives, 2);
+  assert.equal(all[11].miles, 300);
+  assert.equal(all[11].pay, 1200);
+  assert.equal(all[0].drives, 1);
+  assert.equal(
+    all.reduce((s, m) => s + m.drives, 0),
+    3,
+  );
+  const mine = monthlyDrives(loads, 'me@x.com', 12, today);
+  assert.equal(
+    mine.reduce((s, m) => s + m.drives, 0),
+    2,
+  );
+});
+test('drive levels quantize against the busiest month', () => {
+  assert.equal(driveLevel(0, 8), 0);
+  assert.equal(driveLevel(1, 8), 1);
+  assert.equal(driveLevel(4, 8), 2);
+  assert.equal(driveLevel(5, 8), 3);
+  assert.equal(driveLevel(8, 8), 4);
+  assert.equal(driveLevel(1, 1), 4);
+});
+test('seed data includes delivered history spread across recent months', () => {
+  const months = monthlyDrives(seedLoads());
+  assert.ok(months.filter((m) => m.drives > 0).length >= 5);
+  assert.equal(seedLoads().filter((l) => l.status === 'Delivered').length, 12);
 });

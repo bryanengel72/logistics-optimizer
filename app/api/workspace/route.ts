@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { getChatGPTUser, type ChatGPTUser } from '@/app/chatgpt-auth';
-import { defaults, seedLoads, optimize } from '@/lib/model';
+import { defaults, seedLoads, optimize, stampDelivery } from '@/lib/model';
 import {
   InputError,
   string,
@@ -261,7 +261,7 @@ export async function POST(req: Request) {
         .run();
     } else if (action === 'saveLoad') {
       editor(role);
-      const l = validateLoad(b.load);
+      const l = stampDelivery(validateLoad(b.load), now.slice(0, 10));
       if (
         l.driver &&
         !(await d
@@ -298,7 +298,9 @@ export async function POST(req: Request) {
       editor(role);
       if (!Array.isArray(b.loads) || b.loads.length < 1 || b.loads.length > 200)
         throw new InputError('Import between 1 and 200 loads.');
-      const ls = b.loads.map(validateLoad);
+      const ls = b.loads.map((x: unknown) =>
+        stampDelivery(validateLoad(x), now.slice(0, 10)),
+      );
       const existing = await d
         .prepare('SELECT data FROM loads WHERE workspace_id=?')
         .bind(ws)

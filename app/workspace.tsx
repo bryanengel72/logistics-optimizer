@@ -1,5 +1,11 @@
 'use client';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import {
   LayoutDashboard,
   Truck,
@@ -82,6 +88,7 @@ import {
   type Plan,
 } from '@/lib/model';
 import mapData from '@/lib/map-data.json';
+import DriveHeatmap from './drive-heatmap';
 import { validateLoad } from '@/lib/validation';
 import {
   AlertDialog,
@@ -223,7 +230,7 @@ function RouteMap({
         <defs>
           <radialGradient id="mapglow">
             <stop stopColor="#c2dfc4" stopOpacity=".5" />
-            <stop offset="1" stopColor="#e6eef4" stopOpacity="0" />
+            <stop offset="1" stopColor="#e9eee8" stopOpacity="0" />
           </radialGradient>
           <filter id="routeglow">
             <feGaussianBlur stdDeviation="4" />
@@ -237,7 +244,7 @@ function RouteMap({
             <path
               d="M 35 0 L 0 0 0 35"
               fill="none"
-              stroke="#cbd9e4"
+              stroke="#d3dcd1"
               strokeWidth=".35"
             />
           </pattern>
@@ -248,8 +255,8 @@ function RouteMap({
           <path
             key={s.name}
             d={s.path}
-            fill="#f5f8fa"
-            stroke="#c5d3dd"
+            fill="#f7f9f5"
+            stroke="#cfd9cd"
             strokeWidth=".85"
           />
         ))}
@@ -272,7 +279,7 @@ function RouteMap({
             key={t}
             x={x}
             y={y}
-            fill="#647c8d"
+            fill="#7a887f"
             fontSize="8"
             letterSpacing="1.7"
             textAnchor="middle"
@@ -285,9 +292,15 @@ function RouteMap({
             [a, b] = project(l.destLat, l.destLng);
           const d = `M${x} ${y} Q${(x + a) / 2 + 12} ${(y + b) / 2 - 18} ${a} ${b}`;
           return (
-            <g key={l.id} opacity={selected && selected !== l.id ? 0.4 : 1}>
+            <g
+              key={l.id}
+              className="route"
+              opacity={selected && selected !== l.id ? 0.4 : 1}
+              style={{ '--d': `${i * 140}ms` } as CSSProperties}
+            >
               <path
                 d={d}
+                className="route-glow"
                 stroke="#337443"
                 fill="none"
                 strokeWidth="5"
@@ -296,12 +309,15 @@ function RouteMap({
               />
               <path
                 d={d}
+                className={i > 3 ? 'route-line dashed' : 'route-line'}
+                pathLength={i > 3 ? undefined : 1}
                 stroke={i % 3 === 2 ? '#327d87' : '#337443'}
                 fill="none"
                 strokeWidth="2"
                 strokeDasharray={i > 3 ? '4 5' : undefined}
               />
               <g
+                className="route-marker"
                 // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- SVG route marker, with keyboard activation.
                 role="button"
                 tabIndex={0}
@@ -338,7 +354,7 @@ function RouteMap({
             load.origin === city ? load.originLng : load.destLng,
           );
           return (
-            <g key={city}>
+            <g key={city} className="map-city">
               <circle cx={x} cy={y} r="9" fill="#337443" opacity=".12" />
               <circle
                 cx={x}
@@ -351,11 +367,11 @@ function RouteMap({
               <text
                 x={x + 9}
                 y={y - 8}
-                fill="#29485c"
+                fill="#22362a"
                 fontSize="10"
                 style={{
                   paintOrder: 'stroke',
-                  stroke: '#f5f8fa',
+                  stroke: '#f7f9f5',
                   strokeWidth: 3,
                 }}
               >
@@ -365,8 +381,8 @@ function RouteMap({
           );
         })}
         <g transform="translate(640 28)">
-          <path d="M0 -10 L-4 2 L0 0 L4 2 Z" fill="#415f73" />
-          <text y="14" textAnchor="middle" fill="#526b7d" fontSize="9">
+          <path d="M0 -10 L-4 2 L0 0 L4 2 Z" fill="#5b6b62" />
+          <text y="14" textAnchor="middle" fill="#5f6f66" fontSize="9">
             N
           </text>
         </g>
@@ -857,7 +873,7 @@ export default function Workspace() {
               .
             </span>
           </div>
-          <div className="nav-label">WORKSPACE</div>
+          <div className="nav-label">Workspace</div>
           <nav className="navlist">
             {nav.map(([v, Icon]) => (
               <button
@@ -873,7 +889,7 @@ export default function Workspace() {
               </button>
             ))}
           </nav>
-          <div className="nav-label">PERSONAL</div>
+          <div className="nav-label">Personal</div>
           <nav className="navlist">
             {[
               ['Profile', UserRound],
@@ -967,7 +983,7 @@ export default function Workspace() {
           <div className="top-actions">
             <span className="pill gray">
               <i
-                className="dot"
+                className={`dot ${sync === 'Synced' ? '' : 'pulse'}`}
                 style={{ color: sync === 'Synced' ? '#337443' : '#a66a11' }}
               />
               {sync}
@@ -993,7 +1009,7 @@ export default function Workspace() {
             </button>
           </div>
         </header>
-        <main className="content">
+        <main className="content view-enter" key={view}>
           {error && (
             <div className="notice-banner">
               <span>
@@ -1010,7 +1026,7 @@ export default function Workspace() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <h1>{view === 'Overview' ? 'Operations overview' : view}</h1>
                 {sample && view === 'Overview' && (
-                  <span className="demo-tag">SAMPLE DATA</span>
+                  <span className="demo-tag">Sample data</span>
                 )}
               </div>
               <p>{pageDescriptions[view]}</p>
@@ -1360,7 +1376,11 @@ export default function Workspace() {
                     </div>
                     {plan.loads.length ? (
                       plan.loads.map((l, i) => (
-                        <div className="route-stop" key={l.id}>
+                        <div
+                          className="route-stop"
+                          key={l.id}
+                          style={{ '--i': i } as CSSProperties}
+                        >
                           <span className="stop-number">{i + 1}</span>
                           <div style={{ flex: 1 }}>
                             <strong>
@@ -1597,6 +1617,11 @@ export default function Workspace() {
                 </div>
                 {goalCard()}
               </div>
+              <DriveHeatmap
+                loads={loads}
+                drivers={members}
+                initialDriver={user?.email || ''}
+              />
             </>
           )}
           {view === 'Team' && (
@@ -1675,233 +1700,272 @@ export default function Workspace() {
             </>
           )}
           {(view === 'Profile' || view === 'Settings') && (
-            <form
-              className="panel form-panel"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void savePrefs();
-              }}
-            >
-              {view === 'Profile' ? (
-                <>
-                  <h2>Driver profile</h2>
-                  <p>
-                    Your profile and preferences are personal to your account.
-                  </p>
-                  <div className="form-grid">
-                    <Field label="Display name">
-                      <input
-                        required
-                        maxLength={80}
-                        value={draftPrefs.name}
-                        onChange={(e) =>
-                          setDraftPrefs({ ...draftPrefs, name: e.target.value })
-                        }
-                      />
-                    </Field>
-                    <Field label="Starting market">
-                      <Choice
-                        value={draftPrefs.home}
-                        options={Object.keys(cities)}
-                        onChange={(home) => {
-                          const [homeLat, homeLng] = cities[home];
-                          setDraftPrefs({
-                            ...draftPrefs,
-                            home,
-                            homeLat,
-                            homeLng,
-                          });
-                        }}
-                      />
-                    </Field>
-                  </div>
-                  <div className="preferences-toggle">
-                    <div>
-                      <h3>CDL qualified</h3>
-                      <p>
-                        Include loads requiring a commercial driver’s license.
-                      </p>
-                    </div>
-                    <Switch
-                      checked={draftPrefs.cdl}
-                      onCheckedChange={(cdl) =>
-                        setDraftPrefs({ ...draftPrefs, cdl })
-                      }
-                      aria-label="CDL qualified"
-                    />
-                  </div>
-                  <div className="preferences-toggle">
-                    <div>
-                      <h3>Tow-behind capable</h3>
-                      <p>Include loads marked as towable.</p>
-                    </div>
-                    <Switch
-                      checked={draftPrefs.towable}
-                      onCheckedChange={(towable) =>
-                        setDraftPrefs({ ...draftPrefs, towable })
-                      }
-                      aria-label="Tow-behind capable"
-                    />
-                  </div>
-                  <div className="form-section">
-                    <h3>Profit & driving preferences</h3>
+            <>
+              <form
+                className="panel form-panel"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void savePrefs();
+                }}
+              >
+                {view === 'Profile' ? (
+                  <>
+                    <h2>Driver profile</h2>
+                    <p>
+                      Your profile and preferences are personal to your account.
+                    </p>
                     <div className="form-grid">
-                      {prefInput('goal', 'Weekly net goal ($)', 1, 1000000)}
-                      {prefInput('days', 'Maximum days out', 1, 7, 1)}
+                      <Field label="Display name">
+                        <input
+                          required
+                          maxLength={80}
+                          value={draftPrefs.name}
+                          onChange={(e) =>
+                            setDraftPrefs({
+                              ...draftPrefs,
+                              name: e.target.value,
+                            })
+                          }
+                        />
+                      </Field>
+                      <Field label="Starting market">
+                        <Choice
+                          value={draftPrefs.home}
+                          options={Object.keys(cities)}
+                          onChange={(home) => {
+                            const [homeLat, homeLng] = cities[home];
+                            setDraftPrefs({
+                              ...draftPrefs,
+                              home,
+                              homeLat,
+                              homeLng,
+                            });
+                          }}
+                        />
+                      </Field>
+                    </div>
+                    <div className="preferences-toggle">
+                      <div>
+                        <h3>CDL qualified</h3>
+                        <p>
+                          Include loads requiring a commercial driver’s license.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={draftPrefs.cdl}
+                        onCheckedChange={(cdl) =>
+                          setDraftPrefs({ ...draftPrefs, cdl })
+                        }
+                        aria-label="CDL qualified"
+                      />
+                    </div>
+                    <div className="preferences-toggle">
+                      <div>
+                        <h3>Tow-behind capable</h3>
+                        <p>Include loads marked as towable.</p>
+                      </div>
+                      <Switch
+                        checked={draftPrefs.towable}
+                        onCheckedChange={(towable) =>
+                          setDraftPrefs({ ...draftPrefs, towable })
+                        }
+                        aria-label="Tow-behind capable"
+                      />
+                    </div>
+                    <div className="form-section">
+                      <h3>Profit & driving preferences</h3>
+                      <div className="form-grid">
+                        {prefInput('goal', 'Weekly net goal ($)', 1, 1000000)}
+                        {prefInput('days', 'Maximum days out', 1, 7, 1)}
+                        {prefInput(
+                          'minNetDay',
+                          'Minimum net / day ($)',
+                          0,
+                          100000,
+                        )}
+                        {prefInput(
+                          'minNetMile',
+                          'Minimum net / mile ($)',
+                          0,
+                          100,
+                        )}
+                        {prefInput(
+                          'minMiles',
+                          'Minimum loaded miles',
+                          1,
+                          10000,
+                        )}
+                        {prefInput(
+                          'maxMiles',
+                          'Maximum loaded miles',
+                          1,
+                          10000,
+                        )}
+                        {prefInput(
+                          'maxDeadhead',
+                          'Maximum deadhead (%)',
+                          0,
+                          100,
+                        )}
+                        {prefInput('radius', 'Connection radius (mi)', 0, 500)}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <h2>Workspace & cost settings</h2>
+                    <p>
+                      Keep your estimates aligned with your operating costs.
+                    </p>
+                    {workspace?.role === 'owner' && (
+                      <div className="field full" style={{ marginBottom: 22 }}>
+                        <span>Workspace name</span>
+                        <div className="actions">
+                          <input
+                            id="workspace-name"
+                            defaultValue={workspace?.name}
+                            maxLength={80}
+                            style={{ flex: 1 }}
+                          />
+                          <Button
+                            onClick={() => {
+                              const name = (
+                                document.getElementById(
+                                  'workspace-name',
+                                ) as HTMLInputElement
+                              ).value;
+                              void mutate(
+                                'renameWorkspace',
+                                { name },
+                                'Workspace renamed',
+                              );
+                            }}
+                          >
+                            Update name
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    <div className="form-grid">
                       {prefInput(
-                        'minNetDay',
-                        'Minimum net / day ($)',
+                        'diesel',
+                        'Diesel price / gallon ($)',
+                        0.1,
+                        30,
+                      )}
+                      {prefInput(
+                        'unleaded',
+                        'Unleaded price / gallon ($)',
+                        0.1,
+                        30,
+                      )}
+                      {prefInput('mpg', 'Default vehicle MPG', 1, 100)}
+                      {prefInput('hotel', 'Hotel / night ($)', 0, 5000)}
+                      {prefInput('food', 'Meals / day ($)', 0, 1000)}
+                      {prefInput(
+                        'weeklyBudget',
+                        'Weekly expense budget ($)',
+                        0,
+                        1000000,
+                      )}
+                      {prefInput(
+                        'maxExpense',
+                        'Maximum expense / load ($)',
                         0,
                         100000,
                       )}
-                      {prefInput(
-                        'minNetMile',
-                        'Minimum net / mile ($)',
-                        0,
-                        100,
-                      )}
-                      {prefInput('minMiles', 'Minimum loaded miles', 1, 10000)}
-                      {prefInput('maxMiles', 'Maximum loaded miles', 1, 10000)}
-                      {prefInput('maxDeadhead', 'Maximum deadhead (%)', 0, 100)}
-                      {prefInput('radius', 'Connection radius (mi)', 0, 500)}
                     </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <h2>Workspace & cost settings</h2>
-                  <p>Keep your estimates aligned with your operating costs.</p>
-                  {workspace?.role === 'owner' && (
-                    <div className="field full" style={{ marginBottom: 22 }}>
-                      <span>Workspace name</span>
+                    <div
+                      className="preferences-toggle"
+                      style={{ marginTop: 15 }}
+                    >
+                      <div>
+                        <h3>Profit opportunity alerts</h3>
+                        <p>
+                          Show matching opportunities in the in-app Alerts view.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={draftPrefs.alerts}
+                        onCheckedChange={(alerts) =>
+                          setDraftPrefs({ ...draftPrefs, alerts })
+                        }
+                        aria-label="Profit alerts"
+                      />
+                    </div>
+                    <div className="form-section">
+                      <h3>Workspace data</h3>
+                      <p
+                        className="muted"
+                        style={{ fontSize: 14, marginBottom: 15 }}
+                      >
+                        Download your load data or remove illustrative sample
+                        loads before using the workspace for real dispatching.
+                      </p>
                       <div className="actions">
-                        <input
-                          id="workspace-name"
-                          defaultValue={workspace?.name}
-                          maxLength={80}
-                          style={{ flex: 1 }}
-                        />
-                        <Button
-                          onClick={() => {
-                            const name = (
-                              document.getElementById(
-                                'workspace-name',
-                              ) as HTMLInputElement
-                            ).value;
-                            void mutate(
-                              'renameWorkspace',
-                              { name },
-                              'Workspace renamed',
-                            );
-                          }}
-                        >
-                          Update name
+                        <Button onClick={exportCSV}>
+                          <Download />
+                          Export loads
                         </Button>
+                        {canEdit && sample && (
+                          <button
+                            className="btn"
+                            type="button"
+                            onClick={() => setModal('clear-samples')}
+                          >
+                            Remove sample loads
+                          </button>
+                        )}
+                        {workspace?.role === 'owner' && (
+                          <button
+                            className="btn"
+                            type="button"
+                            onClick={() => setModal('reset-demo')}
+                          >
+                            <RotateCcw size={16} />
+                            Reset demo data
+                          </button>
+                        )}
                       </div>
                     </div>
-                  )}
-                  <div className="form-grid">
-                    {prefInput('diesel', 'Diesel price / gallon ($)', 0.1, 30)}
-                    {prefInput(
-                      'unleaded',
-                      'Unleaded price / gallon ($)',
-                      0.1,
-                      30,
-                    )}
-                    {prefInput('mpg', 'Default vehicle MPG', 1, 100)}
-                    {prefInput('hotel', 'Hotel / night ($)', 0, 5000)}
-                    {prefInput('food', 'Meals / day ($)', 0, 1000)}
-                    {prefInput(
-                      'weeklyBudget',
-                      'Weekly expense budget ($)',
-                      0,
-                      1000000,
-                    )}
-                    {prefInput(
-                      'maxExpense',
-                      'Maximum expense / load ($)',
-                      0,
-                      100000,
-                    )}
-                  </div>
-                  <div className="preferences-toggle" style={{ marginTop: 15 }}>
-                    <div>
-                      <h3>Profit opportunity alerts</h3>
-                      <p>
-                        Show matching opportunities in the in-app Alerts view.
+                    <div className="form-section">
+                      <h3>Account</h3>
+                      <p className="muted" style={{ fontSize: 14 }}>
+                        {user?.email || 'You are viewing the demo.'}
                       </p>
-                    </div>
-                    <Switch
-                      checked={draftPrefs.alerts}
-                      onCheckedChange={(alerts) =>
-                        setDraftPrefs({ ...draftPrefs, alerts })
-                      }
-                      aria-label="Profit alerts"
-                    />
-                  </div>
-                  <div className="form-section">
-                    <h3>Workspace data</h3>
-                    <p
-                      className="muted"
-                      style={{ fontSize: 14, marginBottom: 15 }}
-                    >
-                      Download your load data or remove illustrative sample
-                      loads before using the workspace for real dispatching.
-                    </p>
-                    <div className="actions">
-                      <Button onClick={exportCSV}>
-                        <Download />
-                        Export loads
-                      </Button>
-                      {canEdit && sample && (
-                        <button
+                      <div className="actions" style={{ marginTop: 14 }}>
+                        <a
                           className="btn"
-                          type="button"
-                          onClick={() => setModal('clear-samples')}
+                          href={
+                            user
+                              ? '/signout-with-chatgpt'
+                              : '/signin-with-chatgpt?return_to=/'
+                          }
                         >
-                          Remove sample loads
-                        </button>
-                      )}
-                      {workspace?.role === 'owner' && (
-                        <button
-                          className="btn"
-                          type="button"
-                          onClick={() => setModal('reset-demo')}
-                        >
-                          <RotateCcw size={16} />
-                          Reset demo data
-                        </button>
-                      )}
+                          <LogOut size={16} />
+                          {user ? 'Sign out' : 'Sign in with ChatGPT'}
+                        </a>
+                      </div>
                     </div>
-                  </div>
-                  <div className="form-section">
-                    <h3>Account</h3>
-                    <p className="muted" style={{ fontSize: 14 }}>
-                      {user?.email || 'You are viewing the demo.'}
-                    </p>
-                    <div className="actions" style={{ marginTop: 14 }}>
-                      <a
-                        className="btn"
-                        href={
-                          user
-                            ? '/signout-with-chatgpt'
-                            : '/signin-with-chatgpt?return_to=/'
-                        }
-                      >
-                        <LogOut size={16} />
-                        {user ? 'Sign out' : 'Sign in with ChatGPT'}
-                      </a>
-                    </div>
-                  </div>
-                </>
+                  </>
+                )}
+                <div className="form-actions">
+                  <Button type="submit" primary disabled={busy}>
+                    <Check />
+                    Save changes
+                  </Button>
+                </div>
+              </form>
+              {view === 'Profile' && (
+                <div style={{ maxWidth: 960, marginTop: 22 }}>
+                  <DriveHeatmap
+                    loads={loads}
+                    drivers={members}
+                    initialDriver={user?.email || ''}
+                  />
+                </div>
               )}
-              <div className="form-actions">
-                <Button type="submit" primary disabled={busy}>
-                  <Check />
-                  Save changes
-                </Button>
-              </div>
-            </form>
+            </>
           )}
           {view === 'Alerts' && (
             <div className="panel">
@@ -2457,7 +2521,11 @@ export default function Workspace() {
                     </div>
                   </div>
                   {s.plan.loads.map((l, i) => (
-                    <div className="route-stop" key={l.id}>
+                    <div
+                      className="route-stop"
+                      key={l.id}
+                      style={{ '--i': i } as CSSProperties}
+                    >
                       <span className="stop-number">{i + 1}</span>
                       <div>
                         <strong>
@@ -2763,9 +2831,28 @@ function LoadForm({
               'Delivered',
               'Cancelled',
             ]}
-            onChange={(status) => set({ ...l, status })}
+            onChange={(status) =>
+              set({
+                ...l,
+                status,
+                deliveredOn:
+                  status === 'Delivered'
+                    ? l.deliveredOn || new Date().toISOString().slice(0, 10)
+                    : '',
+              })
+            }
           />
         </Field>
+        {l.status === 'Delivered' && (
+          <Field label="Delivered on">
+            <input
+              type="date"
+              value={l.deliveredOn || ''}
+              max={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => set({ ...l, deliveredOn: e.target.value })}
+            />
+          </Field>
+        )}
         <Field label="Assigned driver">
           <Choice
             value={l.driver || 'Unassigned'}

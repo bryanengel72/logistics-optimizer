@@ -23,6 +23,7 @@ export type Load = {
   status: string;
   driver: string;
   notes: string;
+  deliveredOn?: string;
   sample?: boolean;
   version?: number;
 };
@@ -107,8 +108,140 @@ const lanes = [
   ['Memphis, TN', 'St. Louis, MO', 284, 950, 1, 12, 20],
   ['Atlanta, GA', 'Jacksonville, FL', 346, 1015, 1, 15, 16],
 ] as const;
+const history = [
+  ['Atlanta, GA', 'Nashville, TN', 250, 1150, 1, 10, 15, 10, 8],
+  ['Nashville, TN', 'Louisville, KY', 175, 790, 1, 8, 6, 9, 21],
+  ['Atlanta, GA', 'Charlotte, NC', 245, 880, 1, 20, 12, 8, 4],
+  ['Charlotte, NC', 'Knoxville, TN', 230, 860, 1, 14, 9, 8, 19],
+  ['Knoxville, TN', 'Atlanta, GA', 215, 815, 1, 9, 7, 8, 27],
+  ['Atlanta, GA', 'Jacksonville, FL', 346, 1000, 1, 15, 16, 6, 12],
+  ['Memphis, TN', 'St. Louis, MO', 284, 940, 1, 12, 20, 4, 3],
+  ['St. Louis, MO', 'Indianapolis, IN', 243, 870, 1, 10, 14, 4, 16],
+  ['Atlanta, GA', 'Dallas, TX', 782, 1625, 2, 22, 30, 4, 29],
+  ['Columbus, OH', 'Detroit, MI', 200, 800, 1, 11, 12, 2, 7],
+  ['Atlanta, GA', 'Birmingham, AL', 147, 860, 1, 6, 5, 1, 11],
+  ['Birmingham, AL', 'Memphis, TN', 240, 1100, 1, 10, 18, 1, 25],
+] as const;
+function monthsAgo(n: number, day: number, from = new Date()): string {
+  const d = new Date(
+    Date.UTC(from.getUTCFullYear(), from.getUTCMonth() - n, 1),
+  );
+  const last = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  d.setUTCDate(Math.min(day, last));
+  return d.toISOString().slice(0, 10);
+}
+/** Date a load was completed, or null when it has not been delivered. */
+export function deliveryDate(l: Load): string | null {
+  if (l.status !== 'Delivered') return null;
+  if (l.deliveredOn) return l.deliveredOn;
+  const d = new Date(`${l.date}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCDate(d.getUTCDate() + Math.max(0, l.days - 1));
+  return d.toISOString().slice(0, 10);
+}
+/** Keeps the delivery date consistent with the status before saving. */
+export function stampDelivery(l: Load, today: string): Load {
+  if (l.status !== 'Delivered') return { ...l, deliveredOn: '' };
+  return { ...l, deliveredOn: l.deliveredOn || today };
+}
+export type MonthDrives = {
+  key: string;
+  label: string;
+  year: number;
+  month: number;
+  drives: number;
+  miles: number;
+  pay: number;
+};
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+/** Delivered loads bucketed by month, oldest first, ending with the current month. */
+export function monthlyDrives(
+  loads: Load[],
+  driver = '',
+  months = 12,
+  today = new Date(),
+): MonthDrives[] {
+  const out: MonthDrives[] = [];
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - i, 1),
+    );
+    out.push({
+      key: d.toISOString().slice(0, 7),
+      label: MONTHS[d.getUTCMonth()],
+      year: d.getUTCFullYear(),
+      month: d.getUTCMonth() + 1,
+      drives: 0,
+      miles: 0,
+      pay: 0,
+    });
+  }
+  const byKey = new Map(out.map((m) => [m.key, m]));
+  for (const l of loads) {
+    if (driver && l.driver !== driver) continue;
+    const when = deliveryDate(l);
+    const m = when && byKey.get(when.slice(0, 7));
+    if (!m) continue;
+    m.drives += 1;
+    m.miles += l.miles;
+    m.pay += l.pay;
+  }
+  return out;
+}
+/** Quantizes a month's drive count into 0–4 against the busiest month. */
+export function driveLevel(count: number, max: number): number {
+  if (count <= 0 || max <= 0) return 0;
+  return Math.min(4, Math.max(1, Math.ceil((count / max) * 4)));
+}
 export function seedLoads(): Load[] {
-  return lanes.map((r, i) => {
+  const delivered: Load[] = history.map((r, i) => {
+    const a = cities[r[0]],
+      b = cities[r[1]];
+    return {
+      id: `sample-${lanes.length + i + 1}`,
+      order: `SEC-${2501 + i}`,
+      origin: r[0],
+      destination: r[1],
+      originLat: a[0],
+      originLng: a[1],
+      destLat: b[0],
+      destLng: b[1],
+      miles: r[2],
+      pay: r[3],
+      date: monthsAgo(r[7], Math.max(1, r[8] - r[4] + 1)),
+      days: r[4],
+      deadhead: r[5],
+      fuelType: i % 3 === 0 ? 'Unleaded' : 'Diesel',
+      mpg: i % 3 === 0 ? 16 : 14,
+      hotelNights: r[4] - 1,
+      tolls: r[6],
+      returnCost: 85,
+      other: 15,
+      cdl: i % 2 === 0,
+      towable: i % 2 === 1,
+      status: 'Delivered',
+      driver: '',
+      notes: 'Illustrative completed drive from earlier this year.',
+      deliveredOn: monthsAgo(r[7], r[8]),
+      sample: true,
+    };
+  });
+  const available = lanes.map((r, i): Load => {
     const a = cities[r[0]],
       b = cities[r[1]];
     return {
@@ -140,6 +273,7 @@ export function seedLoads(): Load[] {
       sample: true,
     };
   });
+  return [...available, ...delivered];
 }
 export function money(n: number, decimals = 0) {
   return new Intl.NumberFormat('en-US', {
