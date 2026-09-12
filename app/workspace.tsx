@@ -30,6 +30,7 @@ import {
   RefreshCw,
   Link as LinkIcon,
   Info,
+  RotateCcw,
 } from 'lucide-react';
 import {
   SidebarProvider,
@@ -407,7 +408,9 @@ export default function Workspace() {
     [spaces, setSpaces] = useState<
       { id: string; name: string; role: string }[]
     >([]),
-    [joinToken, setJoinToken] = useState('');
+    [joinToken, setJoinToken] = useState(''),
+    [newSpaceName, setNewSpaceName] = useState(''),
+    [newSpaceSeed, setNewSpaceSeed] = useState(true);
   const canEdit = workspace?.role !== 'viewer';
   const sample = loads.some((l) => l.sample);
   const ranked = useMemo(
@@ -924,6 +927,20 @@ export default function Workspace() {
                   : 'Explore with sample data'}
               </p>
             </div>
+            {user && (
+              <button
+                className="navitem"
+                style={{ padding: '17px 0 0' }}
+                onClick={() => {
+                  setNewSpaceName('');
+                  setNewSpaceSeed(true);
+                  setModal('new-workspace');
+                }}
+              >
+                <Plus />
+                New workspace
+              </button>
+            )}
             <button
               className="navitem"
               style={{ padding: '17px 0 0' }}
@@ -1845,6 +1862,16 @@ export default function Workspace() {
                           Remove sample loads
                         </button>
                       )}
+                      {workspace?.role === 'owner' && (
+                        <button
+                          className="btn"
+                          type="button"
+                          onClick={() => setModal('reset-demo')}
+                        >
+                          <RotateCcw size={16} />
+                          Reset demo data
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="form-section">
@@ -1946,7 +1973,12 @@ export default function Workspace() {
       <Dialog
         open={
           !!modal &&
-          !['delete-plan', 'remove-member', 'clear-samples'].includes(modal)
+          ![
+            'delete-plan',
+            'remove-member',
+            'clear-samples',
+            'reset-demo',
+          ].includes(modal)
         }
         onOpenChange={(open) => {
           if (!open) setModal('');
@@ -1967,6 +1999,8 @@ export default function Workspace() {
                   'delete-plan': 'Delete saved plan?',
                   'remove-member': 'Remove team member?',
                   'clear-samples': 'Remove sample loads?',
+                  'reset-demo': 'Reset demo data?',
+                  'new-workspace': 'Create a workspace',
                 } as Record<string, string>
               )[modal] || 'Workspace'}
             </DialogTitle>
@@ -2212,6 +2246,57 @@ export default function Workspace() {
               </div>
             </>
           )}
+          {modal === 'new-workspace' && (
+            <>
+              <p className="import-info">
+                Workspaces keep loads, plans, and team members separate. Keep
+                one for demos and another for your own dispatching, then switch
+                between them from the sidebar.
+              </p>
+              <div className="field full">
+                <span>Workspace name</span>
+                <input
+                  value={newSpaceName}
+                  maxLength={80}
+                  placeholder="Demo workspace"
+                  onChange={(e) => setNewSpaceName(e.target.value)}
+                />
+              </div>
+              <div className="preferences-toggle" style={{ marginTop: 15 }}>
+                <div>
+                  <h3>Start with sample loads</h3>
+                  <p>Fill the new workspace with illustrative demo loads.</p>
+                </div>
+                <Switch
+                  checked={newSpaceSeed}
+                  onCheckedChange={setNewSpaceSeed}
+                  aria-label="Start with sample loads"
+                />
+              </div>
+              <div className="actions" style={{ marginTop: 15 }}>
+                <Button onClick={() => setModal('')}>Cancel</Button>
+                <Button
+                  primary
+                  disabled={busy}
+                  onClick={async () => {
+                    if (
+                      await mutate(
+                        'createWorkspace',
+                        {
+                          name: newSpaceName.trim() || 'Demo workspace',
+                          seed: newSpaceSeed,
+                        },
+                        'Workspace created',
+                      )
+                    )
+                      setModal('');
+                  }}
+                >
+                  Create workspace
+                </Button>
+              </div>
+            </>
+          )}
           {modal === 'join' && (
             <>
               <p className="import-info">
@@ -2395,7 +2480,12 @@ export default function Workspace() {
         </DialogContent>
       </Dialog>
       <AlertDialog
-        open={['delete-plan', 'remove-member', 'clear-samples'].includes(modal)}
+        open={[
+          'delete-plan',
+          'remove-member',
+          'clear-samples',
+          'reset-demo',
+        ].includes(modal)}
         onOpenChange={(open) => {
           if (!open) setModal('');
         }}
@@ -2407,16 +2497,21 @@ export default function Workspace() {
               Review this change before continuing.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {['delete-plan', 'remove-member', 'clear-samples'].includes(
-            modal,
-          ) && (
+          {[
+            'delete-plan',
+            'remove-member',
+            'clear-samples',
+            'reset-demo',
+          ].includes(modal) && (
             <>
               <p className="import-info">
-                {modal === 'clear-samples'
-                  ? 'Only illustrative sample loads will be removed. Your own loads and saved plans will remain.'
-                  : modal === 'remove-member'
-                    ? 'This person will lose access to this workspace. Their shared work will remain.'
-                    : 'This saved snapshot will be deleted. Loads in the workspace will remain.'}
+                {modal === 'reset-demo'
+                  ? `Every load and saved plan in "${workspace?.name}" will be deleted and replaced with the illustrative sample loads. Team members and your preferences will remain. Use this after showing the demo to start clean.`
+                  : modal === 'clear-samples'
+                    ? 'Only illustrative sample loads will be removed. Your own loads and saved plans will remain.'
+                    : modal === 'remove-member'
+                      ? 'This person will lose access to this workspace. Their shared work will remain.'
+                      : 'This saved snapshot will be deleted. Loads in the workspace will remain.'}
               </p>
               <div className="actions">
                 <Button onClick={() => setModal('')}>Cancel</Button>
@@ -2429,7 +2524,9 @@ export default function Workspace() {
                         ? 'deletePlan'
                         : modal === 'remove-member'
                           ? 'removeMember'
-                          : 'clearSamples';
+                          : modal === 'reset-demo'
+                            ? 'resetDemo'
+                            : 'clearSamples';
                     if (
                       await mutate(
                         action,

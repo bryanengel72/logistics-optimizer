@@ -12,6 +12,7 @@
     "lint": "oxlint",
     "format": "oxfmt",
     "db:generate": "drizzle-kit generate",
+    "db:local": "node scripts/db-local.mjs",
     "test": "node tests/run.mjs"
   },
   "dependencies": {

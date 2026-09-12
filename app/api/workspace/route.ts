@@ -335,6 +335,51 @@ export async function POST(req: Request) {
         )
         .bind(ws)
         .run();
+    } else if (action === 'createWorkspace') {
+      const count = await d
+        .prepare('SELECT COUNT(*) AS n FROM workspaces WHERE owner_id=?')
+        .bind(u.userId)
+        .first<{ n: number }>();
+      if ((count?.n ?? 0) >= 10)
+        throw new InputError('You can own up to 10 workspaces.');
+      const name = string(b.name, 'Workspace name', 80);
+      const id = 'ws_' + crypto.randomUUID().replace(/-/g, '');
+      const seed = b.seed === true ? seedLoads() : [];
+      await d.batch([
+        d
+          .prepare(
+            'INSERT INTO workspaces (id,name,owner_id,created) VALUES (?,?,?,?)',
+          )
+          .bind(id, name, u.userId, now),
+        d
+          .prepare(
+            "INSERT INTO members (workspace_id,user_id,role,joined) VALUES (?,?,'owner',?)",
+          )
+          .bind(id, u.userId, now),
+        ...seed.map((l) =>
+          d
+            .prepare(
+              'INSERT INTO loads (id,workspace_id,data,version,updated) VALUES (?,?,?,1,?)',
+            )
+            .bind(l.id, id, JSON.stringify(l), now),
+        ),
+        d
+          .prepare('UPDATE profiles SET active_workspace=? WHERE user_id=?')
+          .bind(id, u.userId),
+      ]);
+    } else if (action === 'resetDemo') {
+      owner(role);
+      await d.batch([
+        d.prepare('DELETE FROM loads WHERE workspace_id=?').bind(ws),
+        d.prepare('DELETE FROM plans WHERE workspace_id=?').bind(ws),
+        ...seedLoads().map((l) =>
+          d
+            .prepare(
+              'INSERT INTO loads (id,workspace_id,data,version,updated) VALUES (?,?,?,1,?)',
+            )
+            .bind(l.id, ws, JSON.stringify(l), now),
+        ),
+      ]);
     } else if (action === 'savePlan') {
       editor(role);
       const name = string(b.name, 'Plan name', 120);
