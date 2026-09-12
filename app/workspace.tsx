@@ -16,6 +16,7 @@ import {
   UserRound,
   ChevronRight,
   ArrowUpRight,
+  ArrowLeft,
   ArrowRight,
   Plus,
   Download,
@@ -37,6 +38,7 @@ import {
   Link as LinkIcon,
   Info,
   RotateCcw,
+  X,
 } from 'lucide-react';
 import {
   SidebarProvider,
@@ -76,6 +78,8 @@ const toast = {
   error: (title: string) => toastManager.add({ title, type: 'error' }),
 };
 import {
+  deliveryDate,
+  type MonthDrives,
   defaults,
   seedLoads,
   costs,
@@ -426,7 +430,15 @@ export default function Workspace() {
     >([]),
     [joinToken, setJoinToken] = useState(''),
     [newSpaceName, setNewSpaceName] = useState(''),
-    [newSpaceSeed, setNewSpaceSeed] = useState(true);
+    [newSpaceSeed, setNewSpaceSeed] = useState(true),
+    [driveFocus, setDriveFocus] = useState<{
+      key: string;
+      label: string;
+      year: number;
+      driver: string;
+      driverName: string;
+      from: string;
+    } | null>(null);
   const canEdit = workspace?.role !== 'viewer';
   const sample = loads.some((l) => l.sample);
   const ranked = useMemo(
@@ -672,8 +684,25 @@ export default function Workspace() {
         .includes(search.toLowerCase()) &&
       (filter === 'All loads' ||
         (filter === 'Top picks' && l.calc.reason === 'Top pick') ||
-        filter === l.status),
+        filter === l.status) &&
+      (!driveFocus ||
+        (l.status === 'Delivered' &&
+          deliveryDate(l)?.slice(0, 7) === driveFocus.key &&
+          (!driveFocus.driver || l.driver === driveFocus.driver))),
   );
+  function openMonth(m: MonthDrives, driver: string, driverName: string) {
+    setDriveFocus({
+      key: m.key,
+      label: m.label,
+      year: m.year,
+      driver,
+      driverName,
+      from: view,
+    });
+    setFilter('Delivered');
+    setSearch('');
+    go('Load board');
+  }
   function loadTable(rows: typeof ranked, compact = false) {
     return rows.length ? (
       <div className="table-wrap">
@@ -1230,7 +1259,10 @@ export default function Workspace() {
               <div className="panel-head">
                 <Tabs
                   value={filter}
-                  onValueChange={(v) => setFilter(String(v))}
+                  onValueChange={(v) => {
+                    setFilter(String(v));
+                    setDriveFocus(null);
+                  }}
                 >
                   <TabsList>
                     {[
@@ -1266,6 +1298,35 @@ export default function Workspace() {
                   Driver preferences
                 </button>
               </div>
+              {driveFocus && (
+                <div className="toolbar focus-bar">
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      const back = driveFocus.from;
+                      setDriveFocus(null);
+                      go(back);
+                    }}
+                  >
+                    <ArrowLeft size={15} />
+                    Back to {driveFocus.from.toLowerCase()}
+                  </button>
+                  <span className="pill focus-chip">
+                    Delivered in {driveFocus.label} {driveFocus.year}
+                    {driveFocus.driver ? ` · ${driveFocus.driverName}` : ''}
+                    <button
+                      type="button"
+                      aria-label="Clear month filter"
+                      onClick={() => setDriveFocus(null)}
+                    >
+                      <X size={13} />
+                    </button>
+                  </span>
+                  <span className="muted" style={{ fontSize: 13 }}>
+                    Clear the filter to browse every delivered load.
+                  </span>
+                </div>
+              )}
               {loadTable(filtered)}
               <div className="table-bottom">
                 {filtered.length} matching loads{' '}
@@ -1621,6 +1682,7 @@ export default function Workspace() {
                 loads={loads}
                 drivers={members}
                 initialDriver={user?.email || ''}
+                onSelectMonth={openMonth}
               />
             </>
           )}
@@ -1962,6 +2024,7 @@ export default function Workspace() {
                     loads={loads}
                     drivers={members}
                     initialDriver={user?.email || ''}
+                    onSelectMonth={openMonth}
                   />
                 </div>
               )}

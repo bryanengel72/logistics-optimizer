@@ -6,7 +6,13 @@ import {
   SelectItem,
   SelectTrigger,
 } from '@/components/ui/select';
-import { driveLevel, money, monthlyDrives, type Load } from '@/lib/model';
+import {
+  driveLevel,
+  money,
+  monthlyDrives,
+  type Load,
+  type MonthDrives,
+} from '@/lib/model';
 
 type Driver = { email: string; name: string };
 const ALL = '__all__';
@@ -16,10 +22,12 @@ export default function DriveHeatmap({
   loads,
   drivers,
   initialDriver,
+  onSelectMonth,
 }: {
   loads: Load[];
   drivers: Driver[];
   initialDriver: string;
+  onSelectMonth?: (month: MonthDrives, driver: string, name: string) => void;
 }) {
   const hasOwn = useMemo(
     () =>
@@ -45,7 +53,10 @@ export default function DriveHeatmap({
       <div className="panel-head drives-head">
         <div>
           <h2>Completed drives</h2>
-          <small>Delivered loads by month over the last year</small>
+          <small>
+            Delivered loads by month over the last year
+            {onSelectMonth ? ' · Click a month to see its loads' : ''}
+          </small>
         </div>
         {drivers.length > 0 && (
           <Select value={driver} onValueChange={(v) => v && setDriver(v)}>
@@ -76,8 +87,15 @@ export default function DriveHeatmap({
                   type="button"
                   className="drive-cell"
                   data-level={level}
+                  data-clickable={!!onSelectMonth && m.drives > 0}
                   style={{ '--i': i } as CSSProperties}
-                  aria-label={`${m.label} ${m.year}: ${detail}`}
+                  aria-label={`${m.label} ${m.year}: ${detail}${
+                    onSelectMonth && m.drives > 0 ? '. Show these loads.' : ''
+                  }`}
+                  onClick={() =>
+                    m.drives > 0 &&
+                    onSelectMonth?.(m, driver === ALL ? '' : driver, who)
+                  }
                 >
                   <span className="drive-month">
                     {m.month === 1 || i === 0
