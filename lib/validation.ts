@@ -1,6 +1,12 @@
 import { defaults, returnModes, type Load, type Preferences } from './model';
 import { hoursRuleKeys } from './hos';
 import { jurisdictionCodes, parseStateMiles, type FuelEntry } from './ifta';
+import {
+  packetStatuses,
+  packetTypes,
+  towTypes,
+  type PacketItem,
+} from './packet';
 export class InputError extends Error {
   status: number;
   constructor(message: string, status = 400) {
@@ -55,8 +61,19 @@ export function validateLoad(v: unknown): Load {
   const l: Load = {
     id: string(x.id, 'Load ID', 100),
     order: string(x.order, 'Order number', 80),
+    ref: text(x.ref, 80),
     origin: string(x.origin, 'Origin', 100),
     destination: string(x.destination, 'Destination', 100),
+    originName: text(x.originName, 120),
+    originAddress: text(x.originAddress, 200),
+    destName: text(x.destName, 120),
+    destAddress: text(x.destAddress, 200),
+    units: number(x.units ?? 1, 'Units', 1, 50, true),
+    towType: option(
+      x.towType ?? (x.towable === true ? 'Tow-behind' : 'N/A'),
+      'Tow type',
+      towTypes,
+    ),
     originLat: number(x.originLat, 'Origin latitude', -90, 90),
     originLng: number(x.originLng, 'Origin longitude', -180, 180),
     destLat: number(x.destLat, 'Destination latitude', -90, 90),
@@ -96,9 +113,34 @@ export function validateLoad(v: unknown): Load {
     deliveredOn: isoDate(x.deliveredOn, 'Delivered on'),
     sample: x.sample === true,
   };
+  l.towable = l.towable || l.towType !== 'N/A';
+  if (x.packet !== undefined && x.packet !== null) l.packet = packet(x.packet);
   if (x.version !== undefined)
     l.version = number(x.version, 'Version', 1, 1e9, true);
   return l;
+}
+function text(v: unknown, max: number) {
+  return typeof v === 'string' ? v.trim().slice(0, max) : '';
+}
+function packet(v: unknown): PacketItem[] {
+  if (!Array.isArray(v) || v.length > packetTypes.length)
+    throw new InputError('The trip packet is not valid.');
+  const known = new Set(packetTypes.map((t) => t.type));
+  return v.map((raw) => {
+    const x = (raw || {}) as Record<string, unknown>;
+    const type = string(x.type, 'Document type', 40);
+    if (!known.has(type)) throw new InputError(`Unknown document: ${type}.`);
+    return {
+      type,
+      status: option(x.status ?? 'Missing', 'Document status', [
+        ...packetStatuses,
+      ]) as PacketItem['status'],
+      amount: number(x.amount ?? 0, `${type} amount`, 0, 100000),
+      date: isoDate(x.date, `${type} date`),
+      note: text(x.note, 200),
+      file: text(x.file, 300),
+    };
+  });
 }
 function stateMilesText(v: unknown) {
   if (v === undefined || v === null || v === '') return '';

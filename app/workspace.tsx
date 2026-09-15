@@ -45,6 +45,9 @@ import {
   Gauge,
   Receipt,
   Trash2,
+  Navigation,
+  LocateFixed,
+  ClipboardList,
 } from 'lucide-react';
 import {
   SidebarProvider,
@@ -123,6 +126,17 @@ import {
 import mapData from '@/lib/map-data.json';
 import DriveHeatmap from './drive-heatmap';
 import { validateLoad } from '@/lib/validation';
+import {
+  packetFor,
+  packetProgress,
+  packetToStore,
+  packetReminders,
+  packetTypes,
+  packetStatuses,
+  towTypes,
+  directionsUrl,
+  type PacketItem,
+} from '@/lib/packet';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -475,7 +489,9 @@ export default function Workspace() {
       quarterOf(new Date().toISOString().slice(0, 10)),
     ),
     [fuelDraft, setFuelDraft] = useState<FuelEntry | null>(null),
-    [fuelLoad, setFuelLoad] = useState('');
+    [fuelLoad, setFuelLoad] = useState(''),
+    [here, setHere] = useState<{ lat: number; lng: number } | null>(null),
+    [locating, setLocating] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
   const canEdit = workspace?.role !== 'viewer';
   const sample = loads.some((l) => l.sample);
@@ -498,9 +514,46 @@ export default function Workspace() {
     [loads, prefs, strategy],
   );
   const reminders = useMemo(
-    () => fuelReminders(loads, fuel, today),
+    () => [
+      ...fuelReminders(loads, fuel, today),
+      ...packetReminders(loads, fuel, today),
+    ],
     [loads, fuel, today],
   );
+  function locate() {
+    if (!navigator.geolocation) {
+      toast.error('This device does not share its location.');
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setHere({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setLocating(false);
+      },
+      () => {
+        toast.error('Location was not shared. Distances use your home market.');
+        setLocating(false);
+      },
+      { maximumAge: 300000, timeout: 10000 },
+    );
+  }
+  function openPacket(l: Load) {
+    setSelected(l);
+    setModal('packet');
+  }
+  async function savePacket(l: Load, items: PacketItem[]) {
+    if (
+      await mutate(
+        'saveLoad',
+        { load: { ...l, packet: packetToStore(items) } },
+        'Trip packet updated',
+      )
+    ) {
+      setModal('');
+      setSelected(null);
+    }
+  }
   const hos = useMemo(
     () =>
       cycleStatus(
@@ -707,8 +760,15 @@ export default function Workspace() {
   function exportCSV() {
     const header = [
       'Order',
+      'Ref',
       'Origin',
       'Destination',
+      'Pickup facility',
+      'Pickup address',
+      'Delivery facility',
+      'Delivery address',
+      'Units',
+      'Tow type',
       'Origin lat',
       'Origin lng',
       'Dest lat',
@@ -736,8 +796,15 @@ export default function Workspace() {
     ];
     const rows = loads.map((l) => [
       l.order,
+      l.ref || '',
       l.origin,
       l.destination,
+      l.originName || '',
+      l.originAddress || '',
+      l.destName || '',
+      l.destAddress || '',
+      l.units || 1,
+      l.towType || (l.towable ? 'Tow-behind' : 'N/A'),
       l.originLat,
       l.originLng,
       l.destLat,
@@ -806,7 +873,7 @@ export default function Workspace() {
   };
   const filtered = ranked.filter(
     (l) =>
-      `${l.origin} ${l.destination} ${l.order} ${l.driver} ${l.returnMode || ''} ${l.returnHub || ''}`
+      `${l.origin} ${l.destination} ${l.order} ${l.ref || ''} ${l.originName || ''} ${l.destName || ''} ${l.driver} ${l.returnMode || ''} ${l.returnHub || ''}`
         .toLowerCase()
         .includes(search.toLowerCase()) &&
       (filter === 'All loads' ||
@@ -865,9 +932,20 @@ export default function Workspace() {
                       <ArrowRight />
                       {l.destination}
                     </div>
+                    {(l.originName || l.destName) && (
+                      <div className="table-meta">
+                        {l.originName || l.origin} →{' '}
+                        {l.destName || l.destination}
+                      </div>
+                    )}
                     <div className="table-meta">
-                      {l.order} <span> · </span> {l.cdl ? 'CDL' : 'Non-CDL'}{' '}
-                      <span> · </span> {l.fuelType}
+                      {l.order}
+                      {l.ref ? ` · ${l.ref}` : ''} <span> · </span>{' '}
+                      {l.cdl ? 'CDL' : 'Non-CDL'} <span> · </span> {l.fuelType}
+                      {l.towType && l.towType !== 'N/A'
+                        ? ` · ${l.towType}`
+                        : ''}
+                      {l.units > 1 ? ` · ${l.units} units` : ''}
                       {l.returnMode && l.returnMode !== 'Unspecified'
                         ? ` · ${l.returnMode}${l.returnHub ? ' ' + l.returnHub : ''}`
                         : ''}
@@ -877,7 +955,11 @@ export default function Workspace() {
                 </TableCell>
                 <TableCell>
                   {l.miles.toLocaleString()}
-                  <div className="table-meta">{l.deadhead} mi deadhead</div>
+                  <div className="table-meta">
+                    {here
+                      ? `${Math.round(distance(here.lat, here.lng, l.originLat, l.originLng) * 1.2).toLocaleString()} mi away`
+                      : `${l.deadhead} mi deadhead`}
+                  </div>
                 </TableCell>
                 <TableCell>
                   {money(l.pay)}
@@ -900,12 +982,30 @@ export default function Workspace() {
                       {l.calc.score}%
                     </span>
                   ) : (
-                    <Badge
-                      gray={l.status === 'Delivered'}
-                      amber={l.status === 'Cancelled'}
-                    >
-                      {l.status}
-                    </Badge>
+                    <>
+                      <Badge
+                        gray={l.status === 'Delivered'}
+                        amber={l.status === 'Cancelled'}
+                      >
+                        {l.status}
+                      </Badge>
+                      {['In transit', 'Delivered'].includes(l.status) &&
+                        (() => {
+                          const p = packetProgress(l, fuel);
+                          return (
+                            <button
+                              type="button"
+                              className={`packet-chip ${p.complete ? 'done' : ''}`}
+                              style={{ display: 'flex', marginTop: 6 }}
+                              onClick={() => openPacket(l)}
+                              aria-label={`Trip packet for ${l.order}: ${p.attached} of ${p.total} documents`}
+                            >
+                              <ClipboardList size={12} />
+                              {p.attached}/{p.total}
+                            </button>
+                          );
+                        })()}
+                    </>
                   )}
                 </TableCell>
                 <TableCell>
@@ -1450,6 +1550,19 @@ export default function Workspace() {
                     onChange={(e) => setSearch(e.target.value)}
                   />
                 </div>
+                <button
+                  className="btn"
+                  onClick={here ? () => setHere(null) : locate}
+                  disabled={locating}
+                  aria-pressed={!!here}
+                >
+                  <LocateFixed size={15} />
+                  {locating
+                    ? 'Locating...'
+                    : here
+                      ? 'Miles from me · on'
+                      : 'Miles from me'}
+                </button>
                 <button className="btn" onClick={() => go('Profile')}>
                   <SlidersHorizontal size={15} />
                   Driver preferences
@@ -2710,8 +2823,11 @@ export default function Workspace() {
               <div className="panel" style={{ marginBottom: 22 }}>
                 <div className="panel-head">
                   <div>
-                    <h2>Fuel & IFTA reminders</h2>
-                    <small>Log every fill-up while you have the receipt</small>
+                    <h2>Paperwork & fuel reminders</h2>
+                    <small>
+                      Missing trip documents, unlogged fill-ups, and filing
+                      dates
+                    </small>
                   </div>
                   <button
                     className="subtle-link"
@@ -2725,6 +2841,8 @@ export default function Workspace() {
                     <div className="notification" key={i}>
                       {r.kind === 'filing' ? (
                         <CalendarDays />
+                      ) : r.kind === 'packet' ? (
+                        <ClipboardList />
                       ) : r.kind === 'receipt' ? (
                         <Receipt />
                       ) : (
@@ -2738,7 +2856,9 @@ export default function Workspace() {
                         className="icon-button"
                         aria-label={r.title}
                         onClick={() => {
-                          if (r.loadId) openFuel(null, r.loadId);
+                          const l = loads.find((x) => x.id === r.loadId);
+                          if (r.kind === 'packet' && l) openPacket(l);
+                          else if (r.loadId) openFuel(null, r.loadId);
                           else if (r.entryId) {
                             const f = fuel.find((x) => x.id === r.entryId);
                             if (f) openFuel(f);
@@ -2863,24 +2983,27 @@ export default function Workspace() {
                   'reset-demo': 'Reset demo data?',
                   'new-workspace': 'Create a workspace',
                   fuel: fuelDraft ? 'Edit fuel stop' : 'Log a fuel stop',
+                  packet: 'Trip packet',
                   'delete-fuel': 'Delete fuel stop?',
                 } as Record<string, string>
               )[modal] || 'Workspace'}
             </DialogTitle>
             <DialogDescription>
-              {modal === 'fuel'
-                ? 'Record the jurisdiction, gallons, and total from the receipt. DEF is suggested from your truck setting.'
-                : modal === 'load'
-                  ? 'Enter the rate and costs to see the true value of this trip.'
-                  : modal === 'share'
-                    ? 'Create an invitation link for a teammate.'
-                    : modal === 'import'
-                      ? 'Preview your CSV before adding loads to the workspace.'
-                      : modal === 'detail'
-                        ? 'Estimated take-home based on this load and your saved preferences.'
-                        : modal === 'goal'
-                          ? 'Set a target that fits your time on the road.'
-                          : 'Review the details before continuing.'}
+              {modal === 'packet'
+                ? `Paperwork for ${selected?.order || 'this trip'}. Mark each document as you collect it.`
+                : modal === 'fuel'
+                  ? 'Record the jurisdiction, gallons, and total from the receipt. DEF is suggested from your truck setting.'
+                  : modal === 'load'
+                    ? 'Enter the rate and costs to see the true value of this trip.'
+                    : modal === 'share'
+                      ? 'Create an invitation link for a teammate.'
+                      : modal === 'import'
+                        ? 'Preview your CSV before adding loads to the workspace.'
+                        : modal === 'detail'
+                          ? 'Estimated take-home based on this load and your saved preferences.'
+                          : modal === 'goal'
+                            ? 'Set a target that fits your time on the road.'
+                            : 'Review the details before continuing.'}
             </DialogDescription>
           </DialogHeader>
           {modal === 'load' && (
@@ -2891,6 +3014,17 @@ export default function Workspace() {
               onSave={saveLoad}
               busy={busy}
               canEdit={canEdit}
+            />
+          )}
+          {modal === 'packet' && selected && (
+            <PacketForm
+              load={selected}
+              fuel={fuel}
+              busy={busy}
+              canEdit={canEdit}
+              onSave={(items) => savePacket(selected, items)}
+              onBack={() => setModal('detail')}
+              onLogFuel={() => openFuel(null, selected.id)}
             />
           )}
           {modal === 'fuel' && (
@@ -2918,9 +3052,54 @@ export default function Workspace() {
                 {selected.destination}
               </div>
               <small>
-                {selected.order} · {selected.miles} miles · {selected.date} ·{' '}
-                {selected.sample ? 'Sample load' : 'Manually entered'}
+                {selected.order}
+                {selected.ref ? ` · Ref ${selected.ref}` : ''} ·{' '}
+                {selected.miles} miles · {selected.date} · {selected.units || 1}{' '}
+                unit{(selected.units || 1) === 1 ? '' : 's'} · Tow type:{' '}
+                {selected.towType || (selected.towable ? 'Tow-behind' : 'N/A')}{' '}
+                · {selected.sample ? 'Sample load' : 'Manually entered'}
               </small>
+              <div className="stops-grid">
+                {(['origin', 'destination'] as const).map((w) => (
+                  <div className="stop-card" key={w}>
+                    <small>{w === 'origin' ? 'Pickup' : 'Delivery'}</small>
+                    <strong>
+                      {(w === 'origin'
+                        ? selected.originName
+                        : selected.destName) ||
+                        (w === 'origin'
+                          ? selected.origin
+                          : selected.destination)}
+                    </strong>
+                    {(w === 'origin'
+                      ? selected.originAddress
+                      : selected.destAddress) && (
+                      <span>
+                        {w === 'origin'
+                          ? selected.originAddress
+                          : selected.destAddress}
+                      </span>
+                    )}
+                    {(w === 'origin'
+                      ? selected.originName
+                      : selected.destName) && (
+                      <span>
+                        {w === 'origin'
+                          ? selected.origin
+                          : selected.destination}
+                      </span>
+                    )}
+                    <a
+                      className="subtle-link"
+                      href={directionsUrl(selected, w)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <Navigation size={13} /> Directions
+                    </a>
+                  </div>
+                ))}
+              </div>
               <div className="mini-kpis">
                 <div>
                   <small>Gross pay</small>
@@ -2996,6 +3175,34 @@ export default function Workspace() {
               <p className="muted" style={{ fontSize: 14 }}>
                 {selected.notes}
               </p>
+              {(() => {
+                const p = packetProgress(selected, fuel);
+                return (
+                  <div className="packet-summary">
+                    <div>
+                      <strong>
+                        Trip packet · {p.attached} of {p.total} documents
+                      </strong>
+                      <span className="score-meter">
+                        <i
+                          style={{
+                            width: `${p.total ? (100 * p.attached) / p.total : 0}%`,
+                          }}
+                        />
+                      </span>
+                      <small>
+                        {p.complete
+                          ? `Complete · ${money(p.documented, 2)} in receipts`
+                          : `Missing: ${p.missing.join(', ')}`}
+                      </small>
+                    </div>
+                    <Button onClick={() => setModal('packet')}>
+                      <ClipboardList />
+                      Open packet
+                    </Button>
+                  </div>
+                );
+              })()}
               <h3 style={{ marginTop: 8 }}>Possible next pickups</h3>
               {loads
                 .filter(
@@ -3512,8 +3719,15 @@ function LoadForm({
     load || {
       id: crypto.randomUUID(),
       order: '',
+      ref: '',
       origin: prefs.home,
       destination: 'Nashville, TN',
+      originName: '',
+      originAddress: '',
+      destName: '',
+      destAddress: '',
+      units: 1,
+      towType: 'N/A',
       originLat: prefs.homeLat,
       originLng: prefs.homeLng,
       destLat: 36.163,
@@ -3588,6 +3802,7 @@ function LoadForm({
         onSave({
           ...l,
           order: l.order.trim() || 'SEC-' + Date.now().toString().slice(-6),
+          towable: l.towable || l.towType !== 'N/A',
         });
       }}
     >
@@ -3600,6 +3815,14 @@ function LoadForm({
             placeholder="e.g. SEC-2613"
           />
         </Field>
+        <Field label="Reference (VIN or dispatch ref)">
+          <input
+            value={l.ref || ''}
+            maxLength={80}
+            onChange={(e) => set({ ...l, ref: e.target.value })}
+            placeholder="e.g. VN549735"
+          />
+        </Field>
         <Field label="Available from">
           <input
             type="date"
@@ -3608,6 +3831,7 @@ function LoadForm({
             onChange={(e) => set({ ...l, date: e.target.value })}
           />
         </Field>
+        {num('units', 'Units on this order', 1, 50, 1)}
         <Field label="Origin city, state">
           <input
             list="cities"
@@ -3644,6 +3868,38 @@ function LoadForm({
                   : { destLat: 0, destLng: 0 }),
               });
             }}
+          />
+        </Field>
+        <Field label="Pickup facility">
+          <input
+            value={l.originName || ''}
+            maxLength={120}
+            placeholder="e.g. International Motors - Springfield"
+            onChange={(e) => set({ ...l, originName: e.target.value })}
+          />
+        </Field>
+        <Field label="Delivery facility">
+          <input
+            value={l.destName || ''}
+            maxLength={120}
+            placeholder="e.g. Ascendance Truck Centers"
+            onChange={(e) => set({ ...l, destName: e.target.value })}
+          />
+        </Field>
+        <Field label="Pickup street address">
+          <input
+            value={l.originAddress || ''}
+            maxLength={200}
+            placeholder="e.g. 5975 Urbana Road, 45501"
+            onChange={(e) => set({ ...l, originAddress: e.target.value })}
+          />
+        </Field>
+        <Field label="Delivery street address">
+          <input
+            value={l.destAddress || ''}
+            maxLength={200}
+            placeholder="e.g. 795 Greenville Park, 16214"
+            onChange={(e) => set({ ...l, destAddress: e.target.value })}
           />
         </Field>
         <datalist id="cities">
@@ -3769,14 +4025,15 @@ function LoadForm({
             onCheckedChange={(cdl) => set({ ...l, cdl })}
           />
         </div>
-        <div className="preferences-toggle">
-          <span>Towable</span>
-          <Switch
-            checked={l.towable}
-            aria-label="Towable"
-            onCheckedChange={(towable) => set({ ...l, towable })}
+        <Field label="Tow type">
+          <Choice
+            value={l.towType || (l.towable ? 'Tow-behind' : 'N/A')}
+            options={towTypes}
+            onChange={(towType) =>
+              set({ ...l, towType, towable: towType !== 'N/A' })
+            }
           />
-        </div>
+        </Field>
         <Field label="Notes" full>
           <textarea
             rows={2}
@@ -3868,8 +4125,17 @@ function parseImport(text: string, p: Preferences): Load[] {
     const l: Load = {
       id: crypto.randomUUID(),
       order: x.order || 'IMP-' + Date.now().toString().slice(-5) + '-' + i,
+      ref: x.ref || x.reference || '',
       origin: x.origin,
       destination: x.destination,
+      originName: x['pickup facility'] || x['origin name'] || '',
+      originAddress: x['pickup address'] || x['origin address'] || '',
+      destName: x['delivery facility'] || x['dest name'] || '',
+      destAddress: x['delivery address'] || x['dest address'] || '',
+      units: n('units', 1),
+      towType:
+        x['tow type'] ||
+        (/^(true|yes|y|1)$/i.test(x.towable) ? 'Tow-behind' : 'N/A'),
       originLat: n('origin lat', orig?.[0] ?? 0),
       originLng: n('origin lng', orig?.[1] ?? 0),
       destLat: n('dest lat', dest?.[0] ?? 0),
@@ -3889,7 +4155,9 @@ function parseImport(text: string, p: Preferences): Load[] {
       stateMiles: x['state miles'] || x['jurisdiction miles'] || '',
       other: n('other', 0),
       cdl: /^(true|yes|y|1)$/i.test(x.cdl),
-      towable: /^(true|yes|y|1)$/i.test(x.towable),
+      towable:
+        /^(true|yes|y|1)$/i.test(x.towable) ||
+        (!!x['tow type'] && x['tow type'] !== 'N/A'),
       status: x.status || 'Available',
       driver: x.driver || '',
       notes: x.notes || '',
@@ -4101,6 +4369,137 @@ function FuelForm({
         <Button primary type="submit" disabled={busy || !canEdit}>
           <Check />
           {busy ? 'Saving...' : 'Save fuel stop'}
+        </Button>
+      </div>
+    </form>
+  );
+}
+function PacketForm({
+  load,
+  fuel,
+  busy,
+  canEdit,
+  onSave,
+  onBack,
+  onLogFuel,
+}: {
+  load: Load;
+  fuel: FuelEntry[];
+  busy: boolean;
+  canEdit: boolean;
+  onSave: (items: PacketItem[]) => void;
+  onBack: () => void;
+  onLogFuel: () => void;
+}) {
+  const [items, setItems] = useState<PacketItem[]>(() => packetFor(load, fuel));
+  const progress = packetProgress({ ...load, packet: items }, fuel);
+  const update = (type: string, patch: Partial<PacketItem>) =>
+    setItems(items.map((i) => (i.type === type ? { ...i, ...patch } : i)));
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave(items);
+      }}
+    >
+      <div className="packet-head">
+        <div>
+          <strong>
+            {progress.attached} of {progress.total} documents attached
+          </strong>
+          <span className="score-meter">
+            <i
+              style={{
+                width: `${progress.total ? (100 * progress.attached) / progress.total : 0}%`,
+              }}
+            />
+          </span>
+        </div>
+        <span className="muted" style={{ fontSize: 13 }}>
+          {money(progress.documented, 2)} in attached receipts
+        </span>
+      </div>
+      {items.map((i) => {
+        const t = packetTypes.find((x) => x.type === i.type)!;
+        const derived = i.type === 'Fuel receipts' && i.note.includes('logged');
+        return (
+          <div
+            className={`packet-row ${i.status === 'Not needed' ? 'skipped' : ''}`}
+            key={i.type}
+          >
+            <div>
+              <strong>{i.type}</strong>
+              <small>{derived ? i.note : t.hint}</small>
+            </div>
+            {derived ? (
+              <div className="actions">
+                <Badge amber={i.status !== 'Attached'}>{i.status}</Badge>
+                <button
+                  type="button"
+                  className="subtle-link"
+                  onClick={onLogFuel}
+                  disabled={!canEdit}
+                >
+                  Log fuel
+                </button>
+              </div>
+            ) : (
+              <Choice
+                label={`${i.type} status`}
+                value={i.status}
+                options={packetStatuses}
+                onChange={(status) =>
+                  update(i.type, { status: status as PacketItem['status'] })
+                }
+              />
+            )}
+            {t.expense ? (
+              <label className="field">
+                <span className="sr-only">{i.type} amount</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100000}
+                  step="any"
+                  value={i.amount}
+                  disabled={derived}
+                  onChange={(e) =>
+                    update(i.type, {
+                      amount:
+                        e.target.value === '' ? 0 : Number(e.target.value),
+                    })
+                  }
+                />
+              </label>
+            ) : (
+              <span />
+            )}
+            <label className="field">
+              <span className="sr-only">{i.type} note</span>
+              <input
+                value={derived ? '' : i.note}
+                disabled={derived}
+                maxLength={200}
+                placeholder={derived ? '' : 'Note or receipt number'}
+                onChange={(e) => update(i.type, { note: e.target.value })}
+              />
+            </label>
+          </div>
+        );
+      })}
+      <p className="import-info" style={{ marginTop: 16 }}>
+        Photo and PDF uploads switch on once file storage is connected. Until
+        then, mark each document as attached when it is in your folder or
+        photographed on your phone.
+      </p>
+      <div className="form-actions" style={{ gap: 10 }}>
+        <Button onClick={onBack}>
+          <ArrowLeft />
+          Back to load
+        </Button>
+        <Button primary type="submit" disabled={busy || !canEdit}>
+          <Check />
+          {busy ? 'Saving...' : 'Save packet'}
         </Button>
       </div>
     </form>

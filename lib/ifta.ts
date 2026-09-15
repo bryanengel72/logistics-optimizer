@@ -275,7 +275,7 @@ export function defNeeded(gallons: number, ratePct: number) {
   return (Math.max(0, gallons) * Math.max(0, ratePct)) / 100;
 }
 export type FuelReminder = {
-  kind: 'log' | 'receipt' | 'filing';
+  kind: 'log' | 'receipt' | 'filing' | 'packet';
   title: string;
   detail: string;
   loadId?: string;

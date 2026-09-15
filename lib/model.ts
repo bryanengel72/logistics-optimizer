@@ -1,9 +1,22 @@
 import { ruleFor, tripSchedule } from './hos';
+import type { PacketItem } from './packet';
 export type Load = {
   id: string;
   order: string;
+  /** Carrier reference such as a VIN or dispatch number. */
+  ref: string;
   origin: string;
   destination: string;
+  /** Pickup facility name and street address. */
+  originName: string;
+  originAddress: string;
+  /** Delivery facility name and street address. */
+  destName: string;
+  destAddress: string;
+  /** Vehicles moved on this order. */
+  units: number;
+  /** N/A, Tow-behind, Decked, or Saddle mount. */
+  towType: string;
   originLat: number;
   originLng: number;
   destLat: number;
@@ -31,6 +44,8 @@ export type Load = {
   driver: string;
   notes: string;
   deliveredOn?: string;
+  /** Trip paperwork the driver has marked; see lib/packet. */
+  packet?: PacketItem[];
   sample?: boolean;
   version?: number;
 };
@@ -302,8 +317,15 @@ export function seedLoads(): Load[] {
     return {
       id: `sample-${lanes.length + i + 1}`,
       order: `SEC-${2501 + i}`,
+      ref: `VN${540100 + i * 37}`,
       origin: r[0],
       destination: r[1],
+      originName: `${r[0].split(',')[0]} Truck Center`,
+      originAddress: '',
+      destName: `${r[1].split(',')[0]} Fleet Services`,
+      destAddress: '',
+      units: 1,
+      towType: i % 2 === 1 ? 'Tow-behind' : 'N/A',
       originLat: a[0],
       originLng: a[1],
       destLat: b[0],
@@ -337,8 +359,15 @@ export function seedLoads(): Load[] {
     return {
       id: `sample-${i + 1}`,
       order: `SEC-${2601 + i}`,
+      ref: `VS${376400 + i * 29}`,
       origin: r[0],
       destination: r[1],
+      originName: `${r[0].split(',')[0]} Truck Center`,
+      originAddress: '',
+      destName: `${r[1].split(',')[0]} Fleet Services`,
+      destAddress: '',
+      units: 1,
+      towType: i % 2 === 0 ? 'Tow-behind' : 'N/A',
       originLat: a[0],
       originLng: a[1],
       destLat: b[0],

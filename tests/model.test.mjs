@@ -679,3 +679,288 @@ test('load and preference validation cover the new return, IFTA and hours fields
   assert.throws(() => validatePreferences({ ...defaults, defRate: 11 }));
   assert.throws(() => validatePreferences({ ...defaults, returnMode: 'Boat' }));
 });
+
+import {
+  packetFor,
+  packetProgress,
+  packetToStore,
+  packetReminders,
+  directionsUrl,
+} from '../work/model/packet.js';
+
+test('a trip packet defaults from the load and derives fuel receipts from logged stops', () => {
+  const l = {
+    ...seedLoads()[0],
+    id: 'p1',
+    tolls: 0,
+    hotelNights: 1,
+    returnMode: 'Team pickup',
+    returnCost: 0,
+    other: 15,
+    packet: undefined,
+  };
+  const items = packetFor(l, []);
+  const by = Object.fromEntries(items.map((i) => [i.type, i]));
+  assert.equal(items.length, 10);
+  assert.equal(by['Toll receipts'].status, 'Not needed');
+  assert.equal(by['Lodging receipt'].status, 'Missing');
+  assert.equal(by['Return ticket'].status, 'Not needed');
+  assert.equal(by['Other expense'].status, 'Missing');
+  assert.equal(by['Other expense'].amount, 15);
+  assert.equal(by['Fuel receipts'].status, 'Missing');
+  const fuel = [
+    {
+      id: 'f1',
+      date: '2026-09-10',
+      jurisdiction: 'GA',
+      fuelType: 'Diesel',
+      gallons: 40,
+      total: 150,
+      def: 1,
+      defTotal: 4,
+      odometer: 0,
+      loadId: 'p1',
+      driver: '',
+      vendor: '',
+      receipt: true,
+      notes: '',
+    },
+    {
+      id: 'f2',
+      date: '2026-09-11',
+      jurisdiction: 'TN',
+      fuelType: 'Diesel',
+      gallons: 30,
+      total: 110,
+      def: 0,
+      defTotal: 0,
+      odometer: 0,
+      loadId: 'p1',
+      driver: '',
+      vendor: '',
+      receipt: false,
+      notes: '',
+    },
+  ];
+  const derived = packetFor(l, fuel).find((i) => i.type === 'Fuel receipts');
+  assert.equal(derived.status, 'Missing');
+  assert.equal(derived.amount, 264);
+  assert.equal(derived.date, '2026-09-11');
+  const all = packetFor(
+    l,
+    fuel.map((f) => ({ ...f, receipt: true })),
+  ).find((i) => i.type === 'Fuel receipts');
+  assert.equal(all.status, 'Attached');
+  const stored = packetFor(
+    {
+      ...l,
+      packet: [
+        {
+          type: 'Bill of lading',
+          status: 'Attached',
+          amount: 0,
+          date: '',
+          note: 'BOL 44',
+          file: '',
+        },
+      ],
+    },
+    [],
+  );
+  assert.equal(stored.find((i) => i.type === 'Bill of lading').note, 'BOL 44');
+});
+test('packet progress counts needed documents, required gaps and documented expenses', () => {
+  const l = {
+    ...seedLoads()[0],
+    id: 'p2',
+    tolls: 20,
+    hotelNights: 0,
+    returnMode: 'Flight',
+    returnCost: 240,
+    other: 0,
+    packet: [
+      {
+        type: 'Pickup inspection',
+        status: 'Attached',
+        amount: 0,
+        date: '',
+        note: '',
+        file: '',
+      },
+      {
+        type: 'Bill of lading',
+        status: 'Attached',
+        amount: 0,
+        date: '',
+        note: '',
+        file: '',
+      },
+      {
+        type: 'Toll receipts',
+        status: 'Attached',
+        amount: 22.5,
+        date: '',
+        note: '',
+        file: '',
+      },
+      {
+        type: 'Return ticket',
+        status: 'Attached',
+        amount: 251,
+        date: '',
+        note: '',
+        file: '',
+      },
+      {
+        type: 'Pickup photos',
+        status: 'Not needed',
+        amount: 0,
+        date: '',
+        note: '',
+        file: '',
+      },
+    ],
+  };
+  const p = packetProgress(l, []);
+  assert.equal(p.total, 7);
+  assert.equal(p.attached, 4);
+  assert.deepEqual(p.missing, [
+    'Delivery receipt',
+    'Delivery photos',
+    'Fuel receipts',
+  ]);
+  assert.deepEqual(p.missingRequired, ['Delivery receipt']);
+  near(p.documented, 273.5);
+  assert.equal(p.complete, false);
+  const done = packetProgress(
+    {
+      ...l,
+      packet: packetFor(l, []).map((i) => ({
+        ...i,
+        status: i.status === 'Missing' ? 'Attached' : i.status,
+      })),
+    },
+    [],
+  );
+  assert.equal(done.complete, true);
+  const stored = packetToStore(packetFor(l, []));
+  assert.ok(stored.every((i) => i.type !== 'Fuel receipts'));
+  assert.equal(
+    validateLoad({ ...l, packet: stored }).packet.length,
+    stored.length,
+  );
+  assert.throws(() =>
+    validateLoad({ ...l, packet: [{ type: 'Napkin', status: 'Attached' }] }),
+  );
+  assert.throws(() =>
+    validateLoad({
+      ...l,
+      packet: [{ type: 'Bill of lading', status: 'Lost' }],
+    }),
+  );
+});
+test('packet reminders cover recent deliveries and loads on the road that lack required paperwork', () => {
+  const base = { ...seedLoads()[0], sample: false, packet: undefined };
+  const loads = [
+    {
+      ...base,
+      id: 'a',
+      order: 'A-1',
+      status: 'Delivered',
+      deliveredOn: '2026-09-10',
+    },
+    {
+      ...base,
+      id: 'b',
+      order: 'B-1',
+      status: 'Delivered',
+      deliveredOn: '2026-07-01',
+    },
+    { ...base, id: 'c', order: 'C-1', status: 'In transit' },
+    {
+      ...base,
+      id: 'd',
+      order: 'D-1',
+      status: 'Delivered',
+      deliveredOn: '2026-09-12',
+      packet: [
+        {
+          type: 'Pickup inspection',
+          status: 'Attached',
+          amount: 0,
+          date: '',
+          note: '',
+          file: '',
+        },
+        {
+          type: 'Bill of lading',
+          status: 'Attached',
+          amount: 0,
+          date: '',
+          note: '',
+          file: '',
+        },
+        {
+          type: 'Delivery receipt',
+          status: 'Attached',
+          amount: 0,
+          date: '',
+          note: '',
+          file: '',
+        },
+      ],
+    },
+    { ...base, id: 'e', order: 'E-1', status: 'Available' },
+  ];
+  const r = packetReminders(loads, [], '2026-09-15');
+  assert.deepEqual(
+    r.map((x) => x.loadId),
+    ['a', 'c'],
+  );
+  assert.ok(r[0].title.includes('delivery receipt'));
+  assert.ok(!r[1].title.includes('delivery'));
+  assert.ok(r.every((x) => x.kind === 'packet'));
+});
+test('new load fields validate with sensible defaults and legacy tow flags', () => {
+  const l = seedLoads()[0];
+  const {
+    ref,
+    originName,
+    originAddress,
+    destName,
+    destAddress,
+    units,
+    towType,
+    ...legacy
+  } = l;
+  void ref;
+  void originName;
+  void originAddress;
+  void destName;
+  void destAddress;
+  void units;
+  void towType;
+  const v = validateLoad({ ...legacy, towable: true });
+  assert.equal(v.units, 1);
+  assert.equal(v.towType, 'Tow-behind');
+  assert.equal(v.ref, '');
+  assert.equal(validateLoad({ ...legacy, towable: false }).towType, 'N/A');
+  assert.equal(
+    validateLoad({ ...l, towType: 'Decked', towable: false }).towable,
+    true,
+  );
+  assert.throws(() => validateLoad({ ...l, towType: 'Flatbed' }));
+  assert.throws(() => validateLoad({ ...l, units: 0 }));
+  assert.ok(
+    directionsUrl(
+      {
+        ...l,
+        originName: 'Springfield Truck Center',
+        originAddress: '5975 Urbana Road',
+      },
+      'origin',
+    ).includes(
+      'Springfield%20Truck%20Center%2C%205975%20Urbana%20Road%2C%20Atlanta',
+    ),
+  );
+});

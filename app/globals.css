@@ -1574,3 +1574,118 @@ textarea::placeholder {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
+
+.stops-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 14px 0 4px;
+}
+.stop-card {
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f8faf7;
+  font-size: 13px;
+  color: #5b6b62;
+}
+.stop-card small {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+}
+.stop-card strong {
+  color: #16261f;
+  font-size: 14px;
+}
+.stop-card .subtle-link {
+  margin-top: 4px;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+.packet-summary,
+.packet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+.packet-summary > div,
+.packet-head > div {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.packet-summary small {
+  color: #5b6b62;
+  font-size: 13px;
+}
+.packet-summary .score-meter,
+.packet-head .score-meter {
+  width: 100%;
+  max-width: 260px;
+}
+.packet-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 0.7fr 1.1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.packet-row > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.packet-row small {
+  color: #5b6b62;
+  font-size: 12px;
+}
+.packet-row.skipped > div:first-child {
+  opacity: 0.55;
+}
+.packet-row .field {
+  gap: 0;
+}
+.packet-row .field input {
+  height: 40px;
+}
+.packet-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #ecd9b3;
+  background: #fbf3e4;
+  color: #7a4f0b;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.packet-chip.done {
+  border-color: #c9ddc5;
+  background: #edf6eb;
+  color: #365e33;
+}
+@media (max-width: 767px) {
+  .stops-grid {
+    grid-template-columns: 1fr;
+  }
+  .packet-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .packet-row > div:first-child {
+    grid-column: 1 / -1;
+  }
+}
