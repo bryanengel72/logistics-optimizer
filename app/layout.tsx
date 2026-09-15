@@ -17,7 +17,7 @@ export const metadata: Metadata = {
       'Find the loads and routes that maximize your take-home profit.',
     images: [
       {
-        url: '/sectional-social-preview.png',
+        url: '/sectional-social-preview-green.png',
         width: 1733,
         height: 907,
         alt: 'White box truck on an open highway for Sectional driveaway logistics',
@@ -29,7 +29,7 @@ export const metadata: Metadata = {
     title: 'Sectional | Driveaway Profit Optimizer',
     description:
       'Find the loads and routes that maximize your take-home profit.',
-    images: ['/sectional-social-preview.png'],
+    images: ['/sectional-social-preview-green.png'],
   },
 };
 export default function RootLayout({
