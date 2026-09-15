@@ -1,4 +1,6 @@
-import { defaults, type Load, type Preferences } from './model';
+import { defaults, returnModes, type Load, type Preferences } from './model';
+import { hoursRuleKeys } from './hos';
+import { jurisdictionCodes, parseStateMiles, type FuelEntry } from './ifta';
 export class InputError extends Error {
   status: number;
   constructor(message: string, status = 400) {
@@ -69,6 +71,16 @@ export function validateLoad(v: unknown): Load {
     hotelNights: number(x.hotelNights, 'Hotel nights', 0, 30, true),
     tolls: number(x.tolls, 'Tolls', 0, 100000),
     returnCost: number(x.returnCost, 'Return transportation', 0, 100000),
+    returnMode: option(
+      x.returnMode === undefined || x.returnMode === ''
+        ? 'Unspecified'
+        : x.returnMode,
+      'Way home',
+      [...returnModes],
+    ),
+    returnHub:
+      typeof x.returnHub === 'string' ? x.returnHub.trim().slice(0, 100) : '',
+    stateMiles: stateMilesText(x.stateMiles),
     other: number(x.other, 'Other expenses', 0, 100000),
     cdl: bool(x.cdl, 'CDL'),
     towable: bool(x.towable, 'Towable'),
@@ -87,6 +99,45 @@ export function validateLoad(v: unknown): Load {
   if (x.version !== undefined)
     l.version = number(x.version, 'Version', 1, 1e9, true);
   return l;
+}
+function stateMilesText(v: unknown) {
+  if (v === undefined || v === null || v === '') return '';
+  if (typeof v !== 'string' || v.length > 300)
+    throw new InputError(
+      'Jurisdiction miles must be text up to 300 characters.',
+    );
+  if (parseStateMiles(v) === null)
+    throw new InputError(
+      'Write jurisdiction miles as state codes and miles, for example "GA 120, TN 130".',
+    );
+  return v.trim();
+}
+export function validateFuel(v: unknown): FuelEntry {
+  if (!v || typeof v !== 'object') throw new InputError('Provide a fuel stop.');
+  const x = v as Record<string, unknown>;
+  const date = isoDate(x.date, 'Fuel date');
+  if (!date) throw new InputError('Fuel date is required.');
+  const f: FuelEntry = {
+    id: string(x.id, 'Fuel stop ID', 100),
+    date,
+    jurisdiction: option(x.jurisdiction, 'Jurisdiction', jurisdictionCodes),
+    fuelType: option(x.fuelType ?? 'Diesel', 'Fuel type', [
+      'Diesel',
+      'Unleaded',
+    ]),
+    gallons: number(x.gallons, 'Gallons', 0.1, 1000),
+    total: number(x.total, 'Fuel total', 0, 100000),
+    def: number(x.def ?? 0, 'DEF gallons', 0, 200),
+    defTotal: number(x.defTotal ?? 0, 'DEF total', 0, 10000),
+    odometer: number(x.odometer ?? 0, 'Odometer', 0, 10000000),
+    loadId: typeof x.loadId === 'string' ? x.loadId.slice(0, 100) : '',
+    driver: typeof x.driver === 'string' ? x.driver.slice(0, 254) : '',
+    vendor: typeof x.vendor === 'string' ? x.vendor.trim().slice(0, 80) : '',
+    receipt: x.receipt === true,
+    notes: typeof x.notes === 'string' ? x.notes.slice(0, 1000) : '',
+    sample: x.sample === true,
+  };
+  return f;
 }
 function isoDate(v: unknown, label: string): string {
   if (v === undefined || v === null || v === '') return '';
@@ -137,5 +188,25 @@ export function validatePreferences(v: unknown): Preferences {
     );
   if (p.minMiles > p.maxMiles)
     throw new InputError('Minimum miles cannot exceed maximum miles.');
+  p.returnMode = option(x.returnMode ?? 'Any', 'Preferred way home', [
+    'Any',
+    ...returnModes,
+  ]);
+  p.hoursRule = option(
+    x.hoursRule ?? defaults.hoursRule,
+    'Hours-of-service rule',
+    hoursRuleKeys,
+  );
+  p.cycle = number(x.cycle ?? defaults.cycle, 'Cycle hours', 60, 70);
+  if (p.cycle !== 60 && p.cycle !== 70)
+    throw new InputError('Choose the 60-hour or 70-hour cycle.');
+  p.avgMph = number(x.avgMph ?? defaults.avgMph, 'Average speed', 20, 75);
+  const log = x.hoursLog === undefined ? defaults.hoursLog : x.hoursLog;
+  if (!Array.isArray(log) || log.length !== 8)
+    throw new InputError('Hours log must cover the last eight days.');
+  p.hoursLog = log.map((h) => number(h, 'On-duty hours', 0, 24));
+  p.hoursLogDate = isoDate(x.hoursLogDate, 'Hours log date');
+  p.truck = string(x.truck ?? defaults.truck, 'Truck', 80);
+  p.defRate = number(x.defRate ?? defaults.defRate, 'DEF rate', 0, 10);
   return p;
 }

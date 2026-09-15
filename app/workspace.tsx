@@ -39,6 +39,12 @@ import {
   Info,
   RotateCcw,
   X,
+  Fuel,
+  Clock,
+  Droplet,
+  Gauge,
+  Receipt,
+  Trash2,
 } from 'lucide-react';
 import {
   SidebarProvider,
@@ -87,10 +93,33 @@ import {
   optimize,
   cities,
   distance,
+  returnModes,
+  returnDefaults,
+  suggestHub,
   type Load,
   type Preferences,
   type Plan,
 } from '@/lib/model';
+import {
+  hoursRules,
+  cycleStatus,
+  planDrivingHours,
+  shiftHoursLog,
+} from '@/lib/hos';
+import {
+  jurisdictions,
+  jurisdictionName,
+  stateOf,
+  quarterOf,
+  recentQuarters,
+  iftaWorksheet,
+  defPresets,
+  defNeeded,
+  fuelReminders,
+  seedFuel,
+  parseStateMiles,
+  type FuelEntry,
+} from '@/lib/ifta';
 import mapData from '@/lib/map-data.json';
 import DriveHeatmap from './drive-heatmap';
 import { validateLoad } from '@/lib/validation';
@@ -107,6 +136,7 @@ const nav = [
   ['Profit planner', Route],
   ['Saved plans', Bookmark],
   ['Expenses & reports', Wallet],
+  ['Fuel & IFTA', Fuel],
   ['Team', Users],
 ] as const;
 type Member = { userId: string; name: string; email: string; role: string };
@@ -120,6 +150,7 @@ type WorkspaceState = {
   preferences: Preferences;
   members: Member[];
   plans: Saved[];
+  fuel?: FuelEntry[];
 };
 const signInUrl = '/signin-with-chatgpt?return_to=/';
 type Saved = { id: string; name: string; plan: Plan; created: string };
@@ -438,7 +469,14 @@ export default function Workspace() {
       driver: string;
       driverName: string;
       from: string;
-    } | null>(null);
+    } | null>(null),
+    [fuel, setFuel] = useState<FuelEntry[]>(() => seedFuel(seedLoads())),
+    [quarter, setQuarter] = useState(() =>
+      quarterOf(new Date().toISOString().slice(0, 10)),
+    ),
+    [fuelDraft, setFuelDraft] = useState<FuelEntry | null>(null),
+    [fuelLoad, setFuelLoad] = useState('');
+  const today = new Date().toISOString().slice(0, 10);
   const canEdit = workspace?.role !== 'viewer';
   const sample = loads.some((l) => l.sample);
   const ranked = useMemo(
@@ -459,6 +497,21 @@ export default function Workspace() {
       ),
     [loads, prefs, strategy],
   );
+  const reminders = useMemo(
+    () => fuelReminders(loads, fuel, today),
+    [loads, fuel, today],
+  );
+  const hos = useMemo(
+    () =>
+      cycleStatus(
+        prefs.hoursLog,
+        hoursRules[prefs.hoursRule] || hoursRules.property,
+        prefs.cycle,
+      ),
+    [prefs],
+  );
+  const planHours = planDrivingHours(plan.loads, prefs.avgMph);
+  const planShort = plan.loads.filter((l) => !costs(l, prefs).hoursOk);
   async function api(action: string, data: Record<string, unknown> = {}) {
     const r = await fetch('/api/workspace', {
       method: 'POST',
@@ -486,6 +539,7 @@ export default function Workspace() {
         setSaved([]);
         setPrefs(defaults);
         setDraftPrefs(defaults);
+        setFuel(seedFuel(seedLoads()));
         return;
       }
       if (!r.ok) throw new Error(j.error || 'Could not load your workspace');
@@ -493,10 +547,22 @@ export default function Workspace() {
       setWorkspace(j.workspace);
       setSpaces(j.workspaces || []);
       setLoads(j.loads);
+      setFuel(j.fuel || []);
       if (!preserve) {
-        setPrefs(j.preferences);
-        setDraftPrefs(j.preferences);
-        setDays(j.preferences.days);
+        const now = new Date().toISOString().slice(0, 10);
+        const p: Preferences = {
+          ...defaults,
+          ...j.preferences,
+          hoursLog: shiftHoursLog(
+            j.preferences.hoursLog,
+            j.preferences.hoursLogDate,
+            now,
+          ),
+          hoursLogDate: now,
+        };
+        setPrefs(p);
+        setDraftPrefs(p);
+        setDays(p.days);
       }
       setMembers(j.members);
       setSaved(j.plans);
@@ -574,11 +640,65 @@ export default function Workspace() {
       setSelected(null);
     }
   }
+  async function saveFuel(f: FuelEntry) {
+    if (
+      await mutate(
+        'saveFuel',
+        { entry: f },
+        'Fuel stop logged. Keep the receipt for your IFTA file.',
+      )
+    ) {
+      setModal('');
+      setFuelDraft(null);
+      setFuelLoad('');
+    }
+  }
+  function openFuel(entry: FuelEntry | null, loadId = '') {
+    setFuelDraft(entry);
+    setFuelLoad(loadId);
+    setModal('fuel');
+  }
+  function exportIfta() {
+    const sheet = iftaWorksheet(loads, fuel, quarter);
+    const header = [
+      'Quarter',
+      'Jurisdiction',
+      'Name',
+      'Total miles',
+      'Estimated miles',
+      'Tax-paid gallons',
+      'Fuel spend',
+    ];
+    const rows = sheet.rows.map((r) => [
+      sheet.quarter,
+      r.jurisdiction,
+      r.name,
+      r.miles.toFixed(0),
+      r.estimatedMiles.toFixed(0),
+      r.gallons.toFixed(2),
+      r.spend.toFixed(2),
+    ]);
+    rows.push([
+      sheet.quarter,
+      'TOTAL',
+      '',
+      sheet.totalMiles.toFixed(0),
+      sheet.estimatedMiles.toFixed(0),
+      sheet.totalGallons.toFixed(2),
+      sheet.spend.toFixed(2),
+    ]);
+    const quote = (v: string) => '"' + v.replaceAll('"', '""') + '"';
+    download(
+      `ifta-${quarter}.csv`,
+      [header, ...rows].map((r) => r.map(quote).join(',')).join('\r\n'),
+      'text/csv',
+    );
+  }
   async function savePrefs() {
     if (
       await mutate(
         'savePreferences',
-        { preferences: draftPrefs },
+        { preferences: { ...draftPrefs, hoursLogDate: today } },
         'Profile and preferences saved',
       )
     )
@@ -603,6 +723,9 @@ export default function Workspace() {
       'Hotel nights',
       'Tolls',
       'Return cost',
+      'Return mode',
+      'Return hub',
+      'State miles',
       'Other',
       'CDL',
       'Towable',
@@ -629,6 +752,9 @@ export default function Workspace() {
       l.hotelNights,
       l.tolls,
       l.returnCost,
+      l.returnMode || 'Unspecified',
+      l.returnHub || '',
+      l.stateMiles || '',
       l.other,
       l.cdl,
       l.towable,
@@ -672,6 +798,7 @@ export default function Workspace() {
     'Profit planner': 'Find a connected route that fits your goals.',
     'Saved plans': 'Your shortlisted routes, ready for the road.',
     'Expenses & reports': 'See where your revenue goes.',
+    'Fuel & IFTA': 'Log every fill-up and keep the quarterly return ready.',
     Team: 'One workspace. A coordinated team.',
     Profile: 'Your preferences shape every recommendation.',
     Settings: 'Manage your workspace and planning defaults.',
@@ -679,7 +806,7 @@ export default function Workspace() {
   };
   const filtered = ranked.filter(
     (l) =>
-      `${l.origin} ${l.destination} ${l.order} ${l.driver}`
+      `${l.origin} ${l.destination} ${l.order} ${l.driver} ${l.returnMode || ''} ${l.returnHub || ''}`
         .toLowerCase()
         .includes(search.toLowerCase()) &&
       (filter === 'All loads' ||
@@ -741,6 +868,9 @@ export default function Workspace() {
                     <div className="table-meta">
                       {l.order} <span> · </span> {l.cdl ? 'CDL' : 'Non-CDL'}{' '}
                       <span> · </span> {l.fuelType}
+                      {l.returnMode && l.returnMode !== 'Unspecified'
+                        ? ` · ${l.returnMode}${l.returnHub ? ' ' + l.returnHub : ''}`
+                        : ''}
                       {l.sample ? ' · Sample' : ''}
                     </div>
                   </button>
@@ -1019,10 +1149,18 @@ export default function Workspace() {
             </span>
             <button
               className="icon-button"
-              aria-label="View alerts"
+              style={{ position: 'relative' }}
+              aria-label={
+                reminders.length
+                  ? `View alerts, ${reminders.length} fuel reminder${reminders.length === 1 ? '' : 's'}`
+                  : 'View alerts'
+              }
               onClick={() => go('Alerts')}
             >
               <Bell size={17} />
+              {reminders.length > 0 && (
+                <span className="bell-count">{reminders.length}</span>
+              )}
             </button>
             <button
               className="avatar"
@@ -1187,6 +1325,25 @@ export default function Workspace() {
                   Route,
                 )}
               </div>
+              {reminders.length > 0 && (
+                <div className="notice-banner" style={{ marginBottom: 23 }}>
+                  <span>
+                    <Fuel
+                      size={15}
+                      style={{
+                        display: 'inline',
+                        marginRight: 8,
+                        verticalAlign: -2,
+                      }}
+                    />
+                    {reminders[0].title}
+                    {reminders.length > 1
+                      ? ` · ${reminders.length - 1} more reminder${reminders.length === 2 ? '' : 's'}`
+                      : ''}
+                  </span>
+                  <Button onClick={() => go('Alerts')}>View reminders</Button>
+                </div>
+              )}
               <div className="main-grid">
                 <div className="panel">
                   <div className="panel-head">
@@ -1388,6 +1545,31 @@ export default function Workspace() {
                   <span>Maximum deadhead</span>
                   <strong>{prefs.maxDeadhead}%</strong>
                 </div>
+                <div className="expense-line">
+                  <span>Plan driving time</span>
+                  <strong>{planHours.toFixed(1)} h</strong>
+                </div>
+                <div className="expense-line">
+                  <span>Cycle hours left</span>
+                  <strong>
+                    {Number.isFinite(hos.remaining)
+                      ? `${hos.remaining.toFixed(1)} h`
+                      : 'No cycle'}
+                  </strong>
+                </div>
+                {(planHours > hos.remaining || planShort.length > 0) && (
+                  <div className="callout amber" style={{ marginTop: 12 }}>
+                    <Clock size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+                    <span>
+                      {planHours > hos.remaining
+                        ? `This route needs about ${planHours.toFixed(1)} h of driving but only ${hos.remaining.toFixed(1)} h remain in your ${prefs.cycle}-hour cycle. Log a 34-hour restart or shorten the route. `
+                        : ''}
+                      {planShort.length > 0
+                        ? `${planShort.map((l) => l.order).join(', ')} ${planShort.length === 1 ? 'has' : 'have'} fewer trip days than the driving limit allows.`
+                        : ''}
+                    </span>
+                  </div>
+                )}
                 <button
                   className="subtle-link"
                   style={{ marginTop: 18 }}
@@ -1686,6 +1868,296 @@ export default function Workspace() {
               />
             </>
           )}
+          {view === 'Fuel & IFTA' &&
+            (() => {
+              const sheet = iftaWorksheet(loads, fuel, quarter);
+              const stops = fuel
+                .filter((f) => quarterOf(f.date) === quarter)
+                .sort((a, b) => b.date.localeCompare(a.date));
+              const diesel = stops
+                .filter((f) => f.fuelType === 'Diesel')
+                .reduce((s, f) => s + f.gallons, 0);
+              const defGal = stops.reduce((s, f) => s + f.def, 0);
+              const loadOf = (id: string) => loads.find((l) => l.id === id);
+              return (
+                <>
+                  <div className="stats">
+                    {stat(
+                      'Fuel logged',
+                      money(sheet.spend),
+                      `${sheet.totalGallons.toFixed(1)} gal · ${sheet.stops} stop${sheet.stops === 1 ? '' : 's'} in ${quarter}`,
+                      Fuel,
+                    )}
+                    {stat(
+                      'DEF added',
+                      `${defGal.toFixed(1)} gal`,
+                      diesel > 0
+                        ? `${((100 * defGal) / diesel).toFixed(1)}% of diesel · target ${prefs.defRate}%`
+                        : `Target ${prefs.defRate}% of diesel gallons`,
+                      Droplet,
+                    )}
+                    {stat(
+                      'IFTA miles',
+                      Math.round(sheet.totalMiles).toLocaleString(),
+                      sheet.estimatedMiles > 0
+                        ? `${Math.round(sheet.estimatedMiles).toLocaleString()} mi estimated from origin and destination`
+                        : `${sheet.loads} delivered load${sheet.loads === 1 ? '' : 's'} with trip-sheet miles`,
+                      Route,
+                    )}
+                    {stat(
+                      'Logged MPG',
+                      sheet.mpg ? sheet.mpg.toFixed(1) : '—',
+                      'Quarter miles ÷ logged gallons',
+                      Gauge,
+                    )}
+                  </div>
+                  <div className="panel">
+                    <div className="panel-head">
+                      <div>
+                        <h2>Fuel log</h2>
+                        <small>
+                          Record each fill-up while you have the receipt
+                        </small>
+                      </div>
+                      <div className="actions">
+                        <Choice
+                          label="Quarter"
+                          value={quarter}
+                          options={recentQuarters(today)}
+                          onChange={setQuarter}
+                        />
+                        <Button
+                          primary
+                          disabled={!canEdit}
+                          onClick={() => openFuel(null)}
+                        >
+                          <Plus />
+                          Log fuel
+                        </Button>
+                      </div>
+                    </div>
+                    {stops.length ? (
+                      <div className="table-wrap">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>DATE / WHERE</TableHead>
+                              <TableHead>FUEL</TableHead>
+                              <TableHead>DEF</TableHead>
+                              <TableHead>LOAD</TableHead>
+                              <TableHead>RECEIPT</TableHead>
+                              <TableHead>
+                                <span className="sr-only">Actions</span>
+                              </TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {stops.map((f) => {
+                              const l = loadOf(f.loadId);
+                              return (
+                                <TableRow key={f.id}>
+                                  <TableCell>
+                                    <button
+                                      style={{
+                                        background: 'none',
+                                        border: 0,
+                                        textAlign: 'left',
+                                        padding: 0,
+                                        color: 'inherit',
+                                      }}
+                                      onClick={() => openFuel(f)}
+                                    >
+                                      <div className="lane">
+                                        {f.date}
+                                        <span className="muted">·</span>
+                                        {jurisdictionName(f.jurisdiction)}
+                                      </div>
+                                      <div className="table-meta">
+                                        {f.vendor || 'Fuel stop'}
+                                        {f.odometer
+                                          ? ` · ${f.odometer.toLocaleString()} mi`
+                                          : ''}
+                                        {f.sample ? ' · Sample' : ''}
+                                      </div>
+                                    </button>
+                                  </TableCell>
+                                  <TableCell>
+                                    {f.gallons.toFixed(1)} gal
+                                    <div className="table-meta">
+                                      {money(f.total, 2)} · {f.fuelType}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    {f.def ? `${f.def.toFixed(1)} gal` : '—'}
+                                    <div className="table-meta">
+                                      {f.def
+                                        ? money(f.defTotal, 2)
+                                        : 'None added'}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    {l ? (
+                                      <>
+                                        {l.order}
+                                        <div className="table-meta">
+                                          {l.origin} → {l.destination}
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <span className="muted">Not linked</span>
+                                    )}
+                                  </TableCell>
+                                  <TableCell>
+                                    <Badge amber={!f.receipt}>
+                                      {f.receipt ? 'Saved' : 'Missing'}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell>
+                                    <button
+                                      className="icon-button"
+                                      aria-label={`Delete fuel stop ${f.date}`}
+                                      disabled={!canEdit}
+                                      onClick={() => {
+                                        setInvite(f.id);
+                                        setModal('delete-fuel');
+                                      }}
+                                    >
+                                      <Trash2 size={16} />
+                                    </button>
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    ) : (
+                      <div className="empty-state">
+                        <Fuel size={30} style={{ margin: '0 auto 15px' }} />
+                        <h3>No fuel logged in {quarter}</h3>
+                        <p>
+                          Log each fill-up with the state, gallons, and total.
+                          The suggested DEF amount uses your truck setting.
+                        </p>
+                        <Button
+                          disabled={!canEdit}
+                          onClick={() => openFuel(null)}
+                        >
+                          <Plus />
+                          Log fuel
+                        </Button>
+                      </div>
+                    )}
+                    <div className="table-bottom">
+                      <span>
+                        {reminders.length
+                          ? `${reminders.length} reminder${reminders.length === 1 ? '' : 's'} waiting in Alerts`
+                          : 'Every load on the road has a logged fill-up'}
+                      </span>
+                      <span>
+                        DEF suggestion: {prefs.defRate}% of diesel gallons
+                      </span>
+                    </div>
+                  </div>
+                  <div className="panel" style={{ marginTop: 22 }}>
+                    <div className="panel-head">
+                      <div>
+                        <h2>IFTA worksheet · {quarter}</h2>
+                        <small>
+                          {sheet.range[0]} to {sheet.range[1]} · return due{' '}
+                          {sheet.due}
+                        </small>
+                      </div>
+                      <Button
+                        onClick={exportIfta}
+                        disabled={!sheet.rows.length}
+                      >
+                        <Download />
+                        Export worksheet
+                      </Button>
+                    </div>
+                    {sheet.rows.length ? (
+                      <div className="table-wrap">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>JURISDICTION</TableHead>
+                              <TableHead>TOTAL MILES</TableHead>
+                              <TableHead>TAX-PAID GALLONS</TableHead>
+                              <TableHead>FUEL SPEND</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {sheet.rows.map((r) => (
+                              <TableRow key={r.jurisdiction}>
+                                <TableCell>
+                                  <strong style={{ fontWeight: 500 }}>
+                                    {r.jurisdiction}
+                                  </strong>
+                                  <div className="table-meta">{r.name}</div>
+                                </TableCell>
+                                <TableCell>
+                                  {Math.round(r.miles).toLocaleString()}
+                                  {r.estimatedMiles > 0 && (
+                                    <div className="table-meta">
+                                      ≈{' '}
+                                      {Math.round(
+                                        r.estimatedMiles,
+                                      ).toLocaleString()}{' '}
+                                      estimated
+                                    </div>
+                                  )}
+                                </TableCell>
+                                <TableCell>{r.gallons.toFixed(1)}</TableCell>
+                                <TableCell>{money(r.spend, 2)}</TableCell>
+                              </TableRow>
+                            ))}
+                            <TableRow>
+                              <TableCell>
+                                <strong>Total</strong>
+                              </TableCell>
+                              <TableCell>
+                                <strong>
+                                  {Math.round(
+                                    sheet.totalMiles,
+                                  ).toLocaleString()}
+                                </strong>
+                              </TableCell>
+                              <TableCell>
+                                <strong>{sheet.totalGallons.toFixed(1)}</strong>
+                              </TableCell>
+                              <TableCell>
+                                <strong>{money(sheet.spend, 2)}</strong>
+                              </TableCell>
+                            </TableRow>
+                          </TableBody>
+                        </Table>
+                      </div>
+                    ) : (
+                      <div className="empty-state">
+                        <h3>Nothing to report for {quarter}</h3>
+                        <p>
+                          Delivered loads and fuel stops dated in this quarter
+                          appear here by jurisdiction.
+                        </p>
+                      </div>
+                    )}
+                    <div style={{ padding: '0 22px 20px' }}>
+                      <p className="import-info">
+                        Miles marked ≈ are split between the origin and
+                        destination states; enter trip-sheet jurisdiction miles
+                        on each load to replace them. Taxable miles usually
+                        equal total miles unless your base jurisdiction exempts
+                        some travel. Apply the quarter&apos;s published tax
+                        rates and your base state&apos;s surcharges when you
+                        file. IFTA applies to vehicles over 26,000 lb or with
+                        three or more axles that cross state lines.
+                      </p>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
           {view === 'Team' && (
             <>
               <div
@@ -1872,6 +2344,152 @@ export default function Workspace() {
                         {prefInput('radius', 'Connection radius (mi)', 0, 500)}
                       </div>
                     </div>
+                    <div className="form-section">
+                      <h3>Driving hours</h3>
+                      <p
+                        className="muted"
+                        style={{ fontSize: 14, marginBottom: 15 }}
+                      >
+                        Choose the rule set you drive under and log on-duty
+                        hours for the last eight days. Loads marked CDL always
+                        use DOT property-carrying limits.
+                      </p>
+                      <div className="form-grid">
+                        <Field label="Hours-of-service rules">
+                          <Choice
+                            value={
+                              (
+                                hoursRules[draftPrefs.hoursRule] ||
+                                hoursRules.property
+                              ).label
+                            }
+                            options={Object.values(hoursRules).map(
+                              (r) => r.label,
+                            )}
+                            onChange={(label) =>
+                              setDraftPrefs({
+                                ...draftPrefs,
+                                hoursRule:
+                                  Object.values(hoursRules).find(
+                                    (r) => r.label === label,
+                                  )?.key || 'property',
+                              })
+                            }
+                          />
+                        </Field>
+                        <Field label="Weekly cycle">
+                          <Choice
+                            value={
+                              draftPrefs.cycle === 60
+                                ? '60 hours / 7 days'
+                                : '70 hours / 8 days'
+                            }
+                            options={['70 hours / 8 days', '60 hours / 7 days']}
+                            onChange={(v) =>
+                              setDraftPrefs({
+                                ...draftPrefs,
+                                cycle: v.startsWith('60') ? 60 : 70,
+                              })
+                            }
+                          />
+                        </Field>
+                        {prefInput(
+                          'avgMph',
+                          'Average speed for time estimates (mph)',
+                          20,
+                          75,
+                        )}
+                        <Field label="Preferred way home after delivery">
+                          <Choice
+                            value={draftPrefs.returnMode || 'Any'}
+                            options={['Any', ...returnModes]}
+                            onChange={(returnMode) =>
+                              setDraftPrefs({ ...draftPrefs, returnMode })
+                            }
+                          />
+                        </Field>
+                      </div>
+                      <p
+                        className="muted"
+                        style={{ fontSize: 13, margin: '14px 0 16px' }}
+                      >
+                        {
+                          (
+                            hoursRules[draftPrefs.hoursRule] ||
+                            hoursRules.property
+                          ).note
+                        }
+                      </p>
+                      <div className="field" style={{ marginBottom: 8 }}>
+                        <span>On-duty hours, last eight days</span>
+                      </div>
+                      <div className="hos-grid">
+                        {(draftPrefs.hoursLog || defaults.hoursLog).map(
+                          (h, i) => {
+                            const d = new Date();
+                            d.setDate(d.getDate() - (7 - i));
+                            const name =
+                              i === 7
+                                ? 'Today'
+                                : d.toLocaleDateString('en-US', {
+                                    weekday: 'short',
+                                  });
+                            return (
+                              <label className="field" key={i}>
+                                <span>{name}</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={24}
+                                  step={0.25}
+                                  value={h}
+                                  aria-label={`On-duty hours ${i === 7 ? 'today' : d.toLocaleDateString()}`}
+                                  onChange={(e) => {
+                                    const log = [
+                                      ...(draftPrefs.hoursLog ||
+                                        defaults.hoursLog),
+                                    ];
+                                    log[i] =
+                                      e.target.value === ''
+                                        ? 0
+                                        : Number(e.target.value);
+                                    setDraftPrefs({
+                                      ...draftPrefs,
+                                      hoursLog: log,
+                                    });
+                                  }}
+                                />
+                              </label>
+                            );
+                          },
+                        )}
+                      </div>
+                      {(() => {
+                        const st = cycleStatus(
+                          draftPrefs.hoursLog || defaults.hoursLog,
+                          hoursRules[draftPrefs.hoursRule] ||
+                            hoursRules.property,
+                          draftPrefs.cycle,
+                        );
+                        return (
+                          <div
+                            className={`callout ${st.restartAdvised || st.remaining <= 0 ? 'amber' : ''}`}
+                            style={{ marginTop: 14 }}
+                          >
+                            <Clock
+                              size={17}
+                              style={{ flexShrink: 0, marginTop: 1 }}
+                            />
+                            <span>
+                              {st.summary}
+                              {st.restartAdvised
+                                ? ' A 34-hour restart is the fastest way back to a full cycle.'
+                                : ''}
+                            </span>
+                          </div>
+                        );
+                      })()}
+                    </div>
                   </>
                 ) : (
                   <>
@@ -1956,6 +2574,63 @@ export default function Workspace() {
                       />
                     </div>
                     <div className="form-section">
+                      <h3>Truck & DEF</h3>
+                      <p
+                        className="muted"
+                        style={{ fontSize: 14, marginBottom: 15 }}
+                      >
+                        The fuel log suggests how much diesel exhaust fluid to
+                        add at each fill-up. Pick the closest truck or enter
+                        your own dosing rate.
+                      </p>
+                      <div className="form-grid">
+                        <Field label="Truck">
+                          <Choice
+                            value={
+                              defPresets.some(
+                                (t) => t.label === draftPrefs.truck,
+                              )
+                                ? draftPrefs.truck
+                                : 'Custom'
+                            }
+                            options={[
+                              ...defPresets.map((t) => t.label),
+                              'Custom',
+                            ]}
+                            onChange={(truck) => {
+                              const preset = defPresets.find(
+                                (t) => t.label === truck,
+                              );
+                              setDraftPrefs({
+                                ...draftPrefs,
+                                truck,
+                                ...(preset ? { defRate: preset.rate } : {}),
+                              });
+                            }}
+                          />
+                        </Field>
+                        {prefInput(
+                          'defRate',
+                          'DEF dosing rate (% of diesel gallons)',
+                          0,
+                          10,
+                        )}
+                      </div>
+                      <p
+                        className="muted"
+                        style={{ fontSize: 13, marginTop: 12 }}
+                      >
+                        SCR engines use roughly 2–3% of diesel volume as DEF, so
+                        a 100-gallon fill needs about{' '}
+                        {defNeeded(
+                          100,
+                          Number(draftPrefs.defRate) || 0,
+                        ).toFixed(1)}{' '}
+                        gallons at your rate. Check the truck&apos;s manual or
+                        DEF gauge for the exact figure.
+                      </p>
+                    </div>
+                    <div className="form-section">
                       <h3>Workspace data</h3>
                       <p
                         className="muted"
@@ -2031,59 +2706,117 @@ export default function Workspace() {
             </>
           )}
           {view === 'Alerts' && (
-            <div className="panel">
-              <div className="panel-head">
-                <h2>Profit opportunities</h2>
-                <button className="subtle-link" onClick={() => go('Settings')}>
-                  Alert settings <Settings size={14} />
-                </button>
-              </div>
-              {!prefs.alerts ? (
-                <div className="empty-state">
-                  <h3>Opportunity alerts are paused</h3>
-                  <p>Turn them on in settings to see matching loads.</p>
+            <>
+              <div className="panel" style={{ marginBottom: 22 }}>
+                <div className="panel-head">
+                  <div>
+                    <h2>Fuel & IFTA reminders</h2>
+                    <small>Log every fill-up while you have the receipt</small>
+                  </div>
+                  <button
+                    className="subtle-link"
+                    onClick={() => go('Fuel & IFTA')}
+                  >
+                    Open fuel log <ArrowRight size={14} />
+                  </button>
                 </div>
-              ) : ranked.filter(
-                  (l) =>
-                    l.status === 'Available' && l.calc.reason === 'Top pick',
-                ).length ? (
-                ranked
-                  .filter(
-                    (l) =>
-                      l.status === 'Available' && l.calc.reason === 'Top pick',
-                  )
-                  .map((l) => (
-                    <div className="notification" key={l.id}>
-                      <TrendingUp />
+                {reminders.length ? (
+                  reminders.map((r, i) => (
+                    <div className="notification" key={i}>
+                      {r.kind === 'filing' ? (
+                        <CalendarDays />
+                      ) : r.kind === 'receipt' ? (
+                        <Receipt />
+                      ) : (
+                        <Fuel />
+                      )}
                       <div style={{ flex: 1 }}>
-                        <h3>
-                          {l.origin} → {l.destination}
-                        </h3>
-                        <p>
-                          {money(l.calc.netDay)} estimated net / day ·{' '}
-                          {l.calc.score}% match ·{' '}
-                          {l.sample ? 'Sample opportunity' : l.order}
-                        </p>
+                        <h3>{r.title}</h3>
+                        <p>{r.detail}</p>
                       </div>
                       <button
                         className="icon-button"
-                        aria-label={`View ${l.order}`}
-                        onClick={() => showLoad(l)}
+                        aria-label={r.title}
+                        onClick={() => {
+                          if (r.loadId) openFuel(null, r.loadId);
+                          else if (r.entryId) {
+                            const f = fuel.find((x) => x.id === r.entryId);
+                            if (f) openFuel(f);
+                          } else go('Fuel & IFTA');
+                        }}
                       >
                         <ArrowUpRight size={16} />
                       </button>
                     </div>
                   ))
-              ) : (
-                <div className="empty-state">
-                  <h3>No top matches yet</h3>
-                  <p>
-                    New manual entries and imports are checked against your
-                    current preferences.
-                  </p>
+                ) : (
+                  <div className="empty-state">
+                    <h3>Fuel log is current</h3>
+                    <p>
+                      Every load on the road has a logged fill-up and every
+                      receipt is saved.
+                    </p>
+                  </div>
+                )}
+              </div>
+              <div className="panel">
+                <div className="panel-head">
+                  <h2>Profit opportunities</h2>
+                  <button
+                    className="subtle-link"
+                    onClick={() => go('Settings')}
+                  >
+                    Alert settings <Settings size={14} />
+                  </button>
                 </div>
-              )}
-            </div>
+                {!prefs.alerts ? (
+                  <div className="empty-state">
+                    <h3>Opportunity alerts are paused</h3>
+                    <p>Turn them on in settings to see matching loads.</p>
+                  </div>
+                ) : ranked.filter(
+                    (l) =>
+                      l.status === 'Available' && l.calc.reason === 'Top pick',
+                  ).length ? (
+                  ranked
+                    .filter(
+                      (l) =>
+                        l.status === 'Available' &&
+                        l.calc.reason === 'Top pick',
+                    )
+                    .map((l) => (
+                      <div className="notification" key={l.id}>
+                        <TrendingUp />
+                        <div style={{ flex: 1 }}>
+                          <h3>
+                            {l.origin} → {l.destination}
+                          </h3>
+                          <p>
+                            {money(l.calc.netDay)} estimated net / day ·{' '}
+                            {l.calc.score}% match ·{' '}
+                            {l.sample ? 'Sample opportunity' : l.order}
+                          </p>
+                        </div>
+                        <button
+                          className="icon-button"
+                          aria-label={`View ${l.order}`}
+                          onClick={() => showLoad(l)}
+                        >
+                          <ArrowUpRight size={16} />
+                        </button>
+                      </div>
+                    ))
+                ) : (
+                  <div className="empty-state">
+                    <h3>No top matches yet</h3>
+                    <p>
+                      New manual entries and imports are checked against your
+                      current preferences.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </>
           )}
           <div className="footer-note">
             <ShieldCheck size={13} />
@@ -2105,6 +2838,7 @@ export default function Workspace() {
             'remove-member',
             'clear-samples',
             'reset-demo',
+            'delete-fuel',
           ].includes(modal)
         }
         onOpenChange={(open) => {
@@ -2128,21 +2862,25 @@ export default function Workspace() {
                   'clear-samples': 'Remove sample loads?',
                   'reset-demo': 'Reset demo data?',
                   'new-workspace': 'Create a workspace',
+                  fuel: fuelDraft ? 'Edit fuel stop' : 'Log a fuel stop',
+                  'delete-fuel': 'Delete fuel stop?',
                 } as Record<string, string>
               )[modal] || 'Workspace'}
             </DialogTitle>
             <DialogDescription>
-              {modal === 'load'
-                ? 'Enter the rate and costs to see the true value of this trip.'
-                : modal === 'share'
-                  ? 'Create an invitation link for a teammate.'
-                  : modal === 'import'
-                    ? 'Preview your CSV before adding loads to the workspace.'
-                    : modal === 'detail'
-                      ? 'Estimated take-home based on this load and your saved preferences.'
-                      : modal === 'goal'
-                        ? 'Set a target that fits your time on the road.'
-                        : 'Review the details before continuing.'}
+              {modal === 'fuel'
+                ? 'Record the jurisdiction, gallons, and total from the receipt. DEF is suggested from your truck setting.'
+                : modal === 'load'
+                  ? 'Enter the rate and costs to see the true value of this trip.'
+                  : modal === 'share'
+                    ? 'Create an invitation link for a teammate.'
+                    : modal === 'import'
+                      ? 'Preview your CSV before adding loads to the workspace.'
+                      : modal === 'detail'
+                        ? 'Estimated take-home based on this load and your saved preferences.'
+                        : modal === 'goal'
+                          ? 'Set a target that fits your time on the road.'
+                          : 'Review the details before continuing.'}
             </DialogDescription>
           </DialogHeader>
           {modal === 'load' && (
@@ -2151,6 +2889,20 @@ export default function Workspace() {
               prefs={prefs}
               members={members}
               onSave={saveLoad}
+              busy={busy}
+              canEdit={canEdit}
+            />
+          )}
+          {modal === 'fuel' && (
+            <FuelForm
+              entry={fuelDraft}
+              loadId={fuelLoad}
+              loads={loads}
+              members={members}
+              prefs={prefs}
+              user={user}
+              today={today}
+              onSave={saveFuel}
               busy={busy}
               canEdit={canEdit}
             />
@@ -2199,7 +2951,12 @@ export default function Workspace() {
                 ['Hotel', costs(selected, prefs).hotel],
                 ['Meals', costs(selected, prefs).food],
                 ['Tolls', selected.tolls],
-                ['Return transportation', selected.returnCost],
+                [
+                  selected.returnMode && selected.returnMode !== 'Unspecified'
+                    ? `Home by ${selected.returnMode.toLowerCase()}${selected.returnHub ? ` · ${selected.returnHub}` : ''}`
+                    : 'Return transportation',
+                  selected.returnCost,
+                ],
                 ['Permits, parking & other', selected.other],
               ].map(([k, v]) => (
                 <div className="expense-line" key={k}>
@@ -2211,6 +2968,31 @@ export default function Workspace() {
                 <span>Total expenses</span>
                 <strong>{money(costs(selected, prefs).expenses, 2)}</strong>
               </div>
+              {(() => {
+                const c = costs(selected, prefs);
+                const total = selected.miles + selected.deadhead;
+                return (
+                  <div
+                    className={`callout ${c.hoursOk ? '' : 'amber'}`}
+                    style={{ marginTop: 14 }}
+                  >
+                    <Clock size={17} style={{ flexShrink: 0, marginTop: 1 }} />
+                    <span>
+                      About {c.drivingHours.toFixed(1)} h behind the wheel (
+                      {total.toLocaleString()} mi at {prefs.avgMph} mph). Needs{' '}
+                      {c.minDays} driving day{c.minDays === 1 ? '' : 's'} under{' '}
+                      {c.hoursRule.short}
+                      {c.breaks
+                        ? ` with ${c.breaks} 30-minute break${c.breaks === 1 ? '' : 's'}`
+                        : ''}
+                      .{' '}
+                      {c.hoursOk
+                        ? `Trip days entered: ${selected.days}.`
+                        : `Only ${selected.days} trip day${selected.days === 1 ? '' : 's'} entered. Add time or split the drive.`}
+                    </span>
+                  </div>
+                );
+              })()}
               <p className="muted" style={{ fontSize: 14 }}>
                 {selected.notes}
               </p>
@@ -2616,6 +3398,7 @@ export default function Workspace() {
           'remove-member',
           'clear-samples',
           'reset-demo',
+          'delete-fuel',
         ].includes(modal)}
         onOpenChange={(open) => {
           if (!open) setModal('');
@@ -2633,6 +3416,7 @@ export default function Workspace() {
             'remove-member',
             'clear-samples',
             'reset-demo',
+            'delete-fuel',
           ].includes(modal) && (
             <>
               <p className="import-info">
@@ -2642,7 +3426,9 @@ export default function Workspace() {
                     ? 'Only illustrative sample loads will be removed. Your own loads and saved plans will remain.'
                     : modal === 'remove-member'
                       ? 'This person will lose access to this workspace. Their shared work will remain.'
-                      : 'This saved snapshot will be deleted. Loads in the workspace will remain.'}
+                      : modal === 'delete-fuel'
+                        ? 'This fuel stop will be removed from the log and the IFTA worksheet.'
+                        : 'This saved snapshot will be deleted. Loads in the workspace will remain.'}
               </p>
               <div className="actions">
                 <Button onClick={() => setModal('')}>Cancel</Button>
@@ -2657,7 +3443,9 @@ export default function Workspace() {
                           ? 'removeMember'
                           : modal === 'reset-demo'
                             ? 'resetDemo'
-                            : 'clearSamples';
+                            : modal === 'delete-fuel'
+                              ? 'deleteFuel'
+                              : 'clearSamples';
                     if (
                       await mutate(
                         action,
@@ -2740,6 +3528,9 @@ function LoadForm({
       hotelNights: 0,
       tolls: 0,
       returnCost: 0,
+      returnMode: 'Unspecified',
+      returnHub: '',
+      stateMiles: '',
       other: 0,
       cdl: false,
       towable: false,
@@ -2785,6 +3576,12 @@ function LoadForm({
         ) {
           toast.error(
             'Enter coordinates for cities outside the suggested list.',
+          );
+          return;
+        }
+        if (parseStateMiles(l.stateMiles || '') === null) {
+          toast.error(
+            'Write jurisdiction miles as state codes and miles, e.g. "GA 120, TN 130".',
           );
           return;
         }
@@ -2882,8 +3679,47 @@ function LoadForm({
         {num('mpg', 'Vehicle MPG', 1, 100)}
         {num('hotelNights', 'Hotel nights', 0, 30, 1)}
         {num('tolls', 'Tolls ($)')}
+        <Field label="Way home after delivery">
+          <Choice
+            value={l.returnMode || 'Unspecified'}
+            options={[...returnModes]}
+            onChange={(returnMode) => {
+              const prev = l.returnMode || 'Unspecified';
+              set({
+                ...l,
+                returnMode,
+                returnCost:
+                  Number(l.returnCost) === 0 ||
+                  Number(l.returnCost) === returnDefaults[prev]
+                    ? returnDefaults[returnMode]
+                    : l.returnCost,
+                returnHub:
+                  !l.returnHub ||
+                  l.returnHub === suggestHub(prev, l.destination)
+                    ? suggestHub(returnMode, l.destination)
+                    : l.returnHub,
+              });
+            }}
+          />
+        </Field>
+        <Field label="Airport, station, or terminal">
+          <input
+            value={l.returnHub || ''}
+            maxLength={100}
+            placeholder="e.g. BNA or Nashville Greyhound"
+            onChange={(e) => set({ ...l, returnHub: e.target.value })}
+          />
+        </Field>
         {num('returnCost', 'Return transportation ($)')}
         {num('other', 'Permits, parking & other ($)')}
+        <Field label="Jurisdiction miles for IFTA (optional)" full>
+          <input
+            value={l.stateMiles || ''}
+            maxLength={300}
+            placeholder='From your trip sheet, e.g. "GA 120, TN 130". Leave blank to estimate.'
+            onChange={(e) => set({ ...l, stateMiles: e.target.value })}
+          />
+        </Field>
         <Field label="Status">
           <Choice
             value={l.status}
@@ -2953,6 +3789,17 @@ function LoadForm({
       <div className="callout" style={{ justifyContent: 'space-between' }}>
         <span>Estimated expenses: {money(c.expenses)}</span>
         <strong>Net: {money(c.net)}</strong>
+      </div>
+      <div
+        className={`callout ${c.hoursOk ? '' : 'amber'}`}
+        style={{ marginTop: 10 }}
+      >
+        <Clock size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+        <span>
+          About {c.drivingHours.toFixed(1)} h driving · needs {c.minDays} day
+          {c.minDays === 1 ? '' : 's'} under {c.hoursRule.short}
+          {c.hoursOk ? '' : `. Trip days is set to ${Number(l.days) || 0}.`}
+        </span>
       </div>
       <div className="form-actions">
         <Button primary type="submit" disabled={busy || !canEdit}>
@@ -3037,6 +3884,9 @@ function parseImport(text: string, p: Preferences): Load[] {
       hotelNights: n('hotel nights', 0),
       tolls: n('tolls', 0),
       returnCost: n('return cost', 0),
+      returnMode: x['return mode'] || 'Unspecified',
+      returnHub: x['return hub'] || '',
+      stateMiles: x['state miles'] || x['jurisdiction miles'] || '',
       other: n('other', 0),
       cdl: /^(true|yes|y|1)$/i.test(x.cdl),
       towable: /^(true|yes|y|1)$/i.test(x.towable),
@@ -3059,4 +3909,200 @@ function parseImport(text: string, p: Preferences): Load[] {
       throw new Error(`Row ${i + 2}: ${(e as Error).message}`);
     }
   });
+}
+function FuelForm({
+  entry,
+  loadId,
+  loads,
+  members,
+  prefs,
+  user,
+  today,
+  onSave,
+  busy,
+  canEdit,
+}: {
+  entry: FuelEntry | null;
+  loadId: string;
+  loads: Load[];
+  members: Member[];
+  prefs: Preferences;
+  user: Member | null;
+  today: string;
+  onSave: (f: FuelEntry) => void;
+  busy: boolean;
+  canEdit: boolean;
+}) {
+  const linked = loads.find((x) => x.id === loadId);
+  const [f, set] = useState<FuelEntry>(
+    entry || {
+      id: crypto.randomUUID(),
+      date: today,
+      jurisdiction:
+        (linked && stateOf(linked.origin)) || stateOf(prefs.home) || 'GA',
+      fuelType: linked?.fuelType || 'Diesel',
+      gallons: 0,
+      total: 0,
+      def: 0,
+      defTotal: 0,
+      odometer: 0,
+      loadId: loadId || '',
+      driver: linked?.driver || user?.email || '',
+      vendor: '',
+      receipt: true,
+      notes: '',
+    },
+  );
+  const suggested = defNeeded(Number(f.gallons) || 0, prefs.defRate);
+  const options = loads
+    .filter((l) => l.status !== 'Cancelled')
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const label = (l: Load) => `${l.order} · ${l.origin} → ${l.destination}`;
+  function num(
+    k: keyof FuelEntry,
+    title: string,
+    min = 0,
+    max = 100000,
+    step: number | string = 'any',
+  ) {
+    return (
+      <Field label={title}>
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          required
+          value={Number(f[k])}
+          onChange={(e) =>
+            set({
+              ...f,
+              [k]: e.target.value === '' ? '' : Number(e.target.value),
+            })
+          }
+        />
+      </Field>
+    );
+  }
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave({
+          ...f,
+          def: Number(f.def) || 0,
+          defTotal: Number(f.defTotal) || 0,
+        });
+      }}
+    >
+      <div className="form-grid">
+        <Field label="Date">
+          <input
+            type="date"
+            required
+            max={today}
+            value={f.date}
+            onChange={(e) => set({ ...f, date: e.target.value })}
+          />
+        </Field>
+        <Field label="Jurisdiction (state or province)">
+          <Choice
+            value={`${f.jurisdiction} · ${jurisdictionName(f.jurisdiction)}`}
+            options={jurisdictions.map(([c, n]) => `${c} · ${n}`)}
+            onChange={(v) => set({ ...f, jurisdiction: v.slice(0, 2) })}
+          />
+        </Field>
+        <Field label="Fuel type">
+          <Choice
+            value={f.fuelType}
+            options={['Diesel', 'Unleaded']}
+            onChange={(fuelType) => set({ ...f, fuelType })}
+          />
+        </Field>
+        {num('gallons', 'Gallons', 0.1, 1000)}
+        {num('total', 'Fuel total ($)', 0, 100000)}
+        {num('odometer', 'Odometer (mi)', 0, 10000000, 1)}
+        {num('def', 'DEF added (gal)', 0, 200)}
+        {num('defTotal', 'DEF total ($)', 0, 10000)}
+        {f.fuelType === 'Diesel' && (
+          <div className="callout" style={{ gridColumn: '1/-1' }}>
+            <Droplet size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+            <span style={{ flex: 1 }}>
+              Suggested DEF: {suggested.toFixed(1)} gal for{' '}
+              {Number(f.gallons) || 0} gal of diesel at {prefs.defRate}% (
+              {prefs.truck}). Change the truck in Settings.
+            </span>
+            <button
+              type="button"
+              className="subtle-link"
+              onClick={() =>
+                set({ ...f, def: Math.round(suggested * 10) / 10 })
+              }
+            >
+              Use it
+            </button>
+          </div>
+        )}
+        <Field label="Load">
+          <Choice
+            value={
+              options.find((l) => l.id === f.loadId)
+                ? label(options.find((l) => l.id === f.loadId)!)
+                : 'Not linked to a load'
+            }
+            options={['Not linked to a load', ...options.map(label)]}
+            onChange={(v) =>
+              set({
+                ...f,
+                loadId: options.find((l) => label(l) === v)?.id || '',
+              })
+            }
+          />
+        </Field>
+        <Field label="Driver">
+          <Choice
+            value={f.driver || 'Unassigned'}
+            options={['Unassigned', ...members.map((m) => m.email)]}
+            onChange={(driver) =>
+              set({ ...f, driver: driver === 'Unassigned' ? '' : driver })
+            }
+          />
+        </Field>
+        <Field label="Truck stop or vendor">
+          <input
+            value={f.vendor}
+            maxLength={80}
+            placeholder="e.g. Pilot #412"
+            onChange={(e) => set({ ...f, vendor: e.target.value })}
+          />
+        </Field>
+        <div className="preferences-toggle">
+          <span>Receipt saved</span>
+          <Switch
+            checked={f.receipt}
+            aria-label="Receipt saved"
+            onCheckedChange={(receipt) => set({ ...f, receipt })}
+          />
+        </div>
+        <Field label="Notes" full>
+          <textarea
+            rows={2}
+            maxLength={1000}
+            value={f.notes}
+            onChange={(e) => set({ ...f, notes: e.target.value })}
+          />
+        </Field>
+      </div>
+      <p className="import-info" style={{ marginTop: 16 }}>
+        IFTA receipts must show the date, seller name and address, jurisdiction,
+        fuel type, gallons, and price. Keep them for four years.
+      </p>
+      <div className="form-actions">
+        <Button primary type="submit" disabled={busy || !canEdit}>
+          <Check />
+          {busy ? 'Saving...' : 'Save fuel stop'}
+        </Button>
+      </div>
+    </form>
+  );
 }

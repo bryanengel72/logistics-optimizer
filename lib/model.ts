@@ -1,3 +1,4 @@
+import { ruleFor, tripSchedule } from './hos';
 export type Load = {
   id: string;
   order: string;
@@ -17,6 +18,12 @@ export type Load = {
   hotelNights: number;
   tolls: number;
   returnCost: number;
+  /** How the driver gets home or to the next pickup after delivery. */
+  returnMode: string;
+  /** Airport, bus terminal, or rail station used for the trip home. */
+  returnHub: string;
+  /** Trip-sheet miles by jurisdiction for IFTA, e.g. "GA 120, TN 130". */
+  stateMiles: string;
   other: number;
   cdl: boolean;
   towable: boolean;
@@ -51,6 +58,22 @@ export type Preferences = {
   minMiles: number;
   maxMiles: number;
   alerts: boolean;
+  /** Preferred way home after a delivery, or "Any". */
+  returnMode: string;
+  /** Hours-of-service rule set key from lib/hos. */
+  hoursRule: string;
+  /** On-duty cycle: 60 hours / 7 days or 70 hours / 8 days. */
+  cycle: number;
+  /** Assumed average speed for converting miles into driving hours. */
+  avgMph: number;
+  /** On-duty hours for the last eight days, oldest first, today last. */
+  hoursLog: number[];
+  /** Date the hours log was last saved, so it can be re-aligned to today. */
+  hoursLogDate: string;
+  /** Truck preset used for the DEF estimate. */
+  truck: string;
+  /** DEF dosing rate as a percentage of diesel gallons. */
+  defRate: number;
 };
 export const defaults: Preferences = {
   name: 'Driver',
@@ -76,7 +99,63 @@ export const defaults: Preferences = {
   minMiles: 100,
   maxMiles: 1000,
   alerts: true,
+  returnMode: 'Any',
+  hoursRule: 'property',
+  cycle: 70,
+  avgMph: 50,
+  hoursLog: [0, 0, 0, 0, 0, 0, 0, 0],
+  hoursLogDate: '',
+  truck: 'Class 8 tractor (Cummins X15, Detroit DD15, PACCAR MX-13)',
+  defRate: 3,
 };
+/** Ways home after a delivery. "Next load nearby" means no return trip. */
+export const returnModes = [
+  'Unspecified',
+  'Flight',
+  'Train',
+  'Bus',
+  'Rental car',
+  'Rideshare',
+  'Team pickup',
+  'Next load nearby',
+] as const;
+/** Starting estimates for a one-way trip home, editable per load. */
+export const returnDefaults: Record<string, number> = {
+  Unspecified: 0,
+  Flight: 240,
+  Train: 95,
+  Bus: 65,
+  'Rental car': 150,
+  Rideshare: 45,
+  'Team pickup': 0,
+  'Next load nearby': 0,
+};
+/** Primary commercial airport for each suggested market. */
+export const airports: Record<string, string> = {
+  'Atlanta, GA': 'ATL',
+  'Nashville, TN': 'BNA',
+  'Dallas, TX': 'DFW',
+  'Chicago, IL': 'ORD',
+  'Charlotte, NC': 'CLT',
+  'Memphis, TN': 'MEM',
+  'Columbus, OH': 'CMH',
+  'Indianapolis, IN': 'IND',
+  'Louisville, KY': 'SDF',
+  'Houston, TX': 'IAH',
+  'Birmingham, AL': 'BHM',
+  'Jacksonville, FL': 'JAX',
+  'St. Louis, MO': 'STL',
+  'Knoxville, TN': 'TYS',
+  'Detroit, MI': 'DTW',
+};
+/** Suggested hub text for a return mode from a destination market. */
+export function suggestHub(mode: string, destination: string) {
+  if (mode === 'Flight') return airports[destination] || '';
+  const city = destination.split(',')[0];
+  if (mode === 'Train') return city ? `${city} Amtrak` : '';
+  if (mode === 'Bus') return city ? `${city} Greyhound` : '';
+  return '';
+}
 export const cities: Record<string, [number, number]> = {
   'Atlanta, GA': [33.749, -84.388],
   'Nashville, TN': [36.163, -86.782],
@@ -208,6 +287,14 @@ export function driveLevel(count: number, max: number): number {
   if (count <= 0 || max <= 0) return 0;
   return Math.min(4, Math.max(1, Math.ceil((count / max) * 4)));
 }
+const seedReturn = ['Bus', 'Train', 'Rideshare', 'Team pickup'];
+function seedStateMiles(from: string, to: string, miles: number) {
+  const a = from.slice(-2),
+    b = to.slice(-2);
+  if (a === b) return `${a} ${miles}`;
+  const first = Math.round(miles * 0.45);
+  return `${a} ${first}, ${b} ${miles - first}`;
+}
 export function seedLoads(): Load[] {
   const delivered: Load[] = history.map((r, i) => {
     const a = cities[r[0]],
@@ -231,6 +318,9 @@ export function seedLoads(): Load[] {
       hotelNights: r[4] - 1,
       tolls: r[6],
       returnCost: 85,
+      returnMode: seedReturn[i % seedReturn.length],
+      returnHub: suggestHub(seedReturn[i % seedReturn.length], r[1]),
+      stateMiles: i % 3 === 0 ? seedStateMiles(r[0], r[1], r[2]) : '',
       other: 15,
       cdl: i % 2 === 0,
       towable: i % 2 === 1,
@@ -262,7 +352,13 @@ export function seedLoads(): Load[] {
       mpg: i % 4 === 0 ? 16 : 14,
       hotelNights: r[4] - 1,
       tolls: r[6],
-      returnCost: 85,
+      returnCost: r[4] > 1 ? returnDefaults.Flight : 85,
+      returnMode: r[4] > 1 ? 'Flight' : seedReturn[i % seedReturn.length],
+      returnHub: suggestHub(
+        r[4] > 1 ? 'Flight' : seedReturn[i % seedReturn.length],
+        r[1],
+      ),
+      stateMiles: '',
       other: 15,
       cdl: i % 3 !== 0,
       towable: i % 2 === 0,
@@ -310,10 +406,12 @@ export function costs(l: Load, p: Preferences) {
           10 * Math.min(1, l.pay / l.miles / 3) +
           10 * Math.max(0, 1 - deadheadPct / Math.max(1, p.maxDeadhead)) +
           5 * (l.destination === p.home ? 1 : 0.5) +
-          5 * Math.max(0, 1 - l.returnCost / 300),
+          5 * Math.max(0, 1 - l.returnCost / 300) * returnFit(l, p),
       ),
     ),
   );
+  const rule = ruleFor(l, p);
+  const trip = tripSchedule(l.miles + l.deadhead, rule, p.avgMph);
   const reason = !qualified
     ? 'Outside profile'
     : expenses > p.maxExpense
@@ -337,7 +435,23 @@ export function costs(l: Load, p: Preferences) {
     score,
     qualified,
     reason,
+    drivingHours: trip.hours,
+    minDays: trip.days,
+    breaks: trip.breaks,
+    hoursRule: rule,
+    hoursOk: l.days >= trip.days,
   };
+}
+/** 1 when the load's way home matches the driver's preference, less otherwise. */
+export function returnFit(
+  l: Pick<Load, 'returnMode'>,
+  p: Pick<Preferences, 'returnMode'>,
+) {
+  if (!p.returnMode || p.returnMode === 'Any') return 1;
+  const mode = l.returnMode || 'Unspecified';
+  if (mode === p.returnMode) return 1;
+  if (mode === 'Unspecified' || mode === 'Next load nearby') return 0.7;
+  return 0.4;
 }
 export function distance(a: number, b: number, c: number, d: number) {
   const rad = Math.PI / 180;

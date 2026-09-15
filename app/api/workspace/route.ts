@@ -1,9 +1,11 @@
 import { env } from 'cloudflare:workers';
 import { getChatGPTUser, type ChatGPTUser } from '@/app/chatgpt-auth';
 import { defaults, seedLoads, optimize, stampDelivery } from '@/lib/model';
+import { seedFuel } from '@/lib/ifta';
 import {
   InputError,
   string,
+  validateFuel,
   validateLoad,
   validatePreferences,
 } from '@/lib/validation';
@@ -49,6 +51,13 @@ async function initialize(u: ChatGPTUser) {
             'INSERT OR IGNORE INTO loads (id,workspace_id,data,version,updated) SELECT ?,?,?,1,? WHERE NOT EXISTS (SELECT 1 FROM profiles WHERE user_id=?)',
           )
           .bind(l.id, ws, JSON.stringify(l), now, u.userId),
+      ),
+      ...seedFuel(seedLoads()).map((f) =>
+        d
+          .prepare(
+            'INSERT OR IGNORE INTO fuel (id,workspace_id,data,updated) SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM profiles WHERE user_id=?)',
+          )
+          .bind(f.id, ws, JSON.stringify(f), now, u.userId),
       ),
       d
         .prepare(
@@ -103,33 +112,40 @@ async function state(u: ChatGPTUser) {
       .run();
     m = await membership(u.userId, ws);
   }
-  const [space, loadRows, memberRows, planRows, spaces] = await Promise.all([
-    d.prepare('SELECT id,name FROM workspaces WHERE id=?').bind(ws).first(),
-    d
-      .prepare(
-        'SELECT data,version FROM loads WHERE workspace_id=? ORDER BY updated DESC,id',
-      )
-      .bind(ws)
-      .all<{ data: string; version: number }>(),
-    d
-      .prepare(
-        'SELECT m.user_id AS userId,p.name,p.email,m.role FROM members m JOIN profiles p ON m.user_id=p.user_id WHERE m.workspace_id=? ORDER BY m.joined',
-      )
-      .bind(ws)
-      .all(),
-    d
-      .prepare(
-        'SELECT id,name,data,created FROM plans WHERE workspace_id=? ORDER BY created DESC',
-      )
-      .bind(ws)
-      .all<{ id: string; name: string; data: string; created: string }>(),
-    d
-      .prepare(
-        'SELECT w.id,w.name,m.role FROM members m JOIN workspaces w ON m.workspace_id=w.id WHERE m.user_id=?',
-      )
-      .bind(u.userId)
-      .all(),
-  ]);
+  const [space, loadRows, memberRows, planRows, spaces, fuelRows] =
+    await Promise.all([
+      d.prepare('SELECT id,name FROM workspaces WHERE id=?').bind(ws).first(),
+      d
+        .prepare(
+          'SELECT data,version FROM loads WHERE workspace_id=? ORDER BY updated DESC,id',
+        )
+        .bind(ws)
+        .all<{ data: string; version: number }>(),
+      d
+        .prepare(
+          'SELECT m.user_id AS userId,p.name,p.email,m.role FROM members m JOIN profiles p ON m.user_id=p.user_id WHERE m.workspace_id=? ORDER BY m.joined',
+        )
+        .bind(ws)
+        .all(),
+      d
+        .prepare(
+          'SELECT id,name,data,created FROM plans WHERE workspace_id=? ORDER BY created DESC',
+        )
+        .bind(ws)
+        .all<{ id: string; name: string; data: string; created: string }>(),
+      d
+        .prepare(
+          'SELECT w.id,w.name,m.role FROM members m JOIN workspaces w ON m.workspace_id=w.id WHERE m.user_id=?',
+        )
+        .bind(u.userId)
+        .all(),
+      d
+        .prepare(
+          'SELECT data FROM fuel WHERE workspace_id=? ORDER BY updated DESC,id',
+        )
+        .bind(ws)
+        .all<{ data: string }>(),
+    ]);
   return {
     user: {
       userId: u.userId,
@@ -139,7 +155,7 @@ async function state(u: ChatGPTUser) {
     },
     workspace: { ...space, role: m.role },
     workspaces: spaces.results,
-    preferences: JSON.parse(profile!.preferences),
+    preferences: { ...defaults, ...JSON.parse(profile!.preferences) },
     loads: loadRows.results.map((r) => ({
       ...JSON.parse(r.data),
       version: r.version,
@@ -151,6 +167,7 @@ async function state(u: ChatGPTUser) {
       plan: JSON.parse(r.data),
       created: r.created,
     })),
+    fuel: fuelRows.results.map((r) => JSON.parse(r.data)),
   };
 }
 function failure(e: unknown) {
@@ -331,12 +348,54 @@ export async function POST(req: Request) {
       );
     } else if (action === 'clearSamples') {
       editor(role);
+      await d.batch([
+        d
+          .prepare(
+            "DELETE FROM loads WHERE workspace_id=? AND json_extract(data,'$.sample')=1",
+          )
+          .bind(ws),
+        d
+          .prepare(
+            "DELETE FROM fuel WHERE workspace_id=? AND json_extract(data,'$.sample')=1",
+          )
+          .bind(ws),
+      ]);
+    } else if (action === 'saveFuel') {
+      editor(role);
+      const f = validateFuel(b.entry);
+      if (
+        f.driver &&
+        !(await d
+          .prepare(
+            'SELECT 1 FROM members m JOIN profiles p ON m.user_id=p.user_id WHERE m.workspace_id=? AND p.email=?',
+          )
+          .bind(ws, f.driver)
+          .first())
+      )
+        throw new InputError(
+          'Choose a current workspace member as the driver.',
+        );
+      if (
+        f.loadId &&
+        !(await d
+          .prepare('SELECT 1 FROM loads WHERE workspace_id=? AND id=?')
+          .bind(ws, f.loadId)
+          .first())
+      )
+        throw new InputError('Link the fuel stop to a load in this workspace.');
       await d
         .prepare(
-          "DELETE FROM loads WHERE workspace_id=? AND json_extract(data,'$.sample')=1",
+          'INSERT INTO fuel (id,workspace_id,data,updated) VALUES (?,?,?,?) ON CONFLICT(workspace_id,id) DO UPDATE SET data=excluded.data,updated=excluded.updated',
         )
-        .bind(ws)
+        .bind(f.id, ws, JSON.stringify({ ...f, sample: false }), now)
         .run();
+    } else if (action === 'deleteFuel') {
+      editor(role);
+      const r = await d
+        .prepare('DELETE FROM fuel WHERE workspace_id=? AND id=?')
+        .bind(ws, string(b.id, 'Fuel stop ID'))
+        .run();
+      if (!r.meta.changes) throw new InputError('Fuel stop not found.', 404);
     } else if (action === 'createWorkspace') {
       const count = await d
         .prepare('SELECT COUNT(*) AS n FROM workspaces WHERE owner_id=?')
@@ -365,6 +424,13 @@ export async function POST(req: Request) {
             )
             .bind(l.id, id, JSON.stringify(l), now),
         ),
+        ...seedFuel(seed).map((f) =>
+          d
+            .prepare(
+              'INSERT INTO fuel (id,workspace_id,data,updated) VALUES (?,?,?,?)',
+            )
+            .bind(f.id, id, JSON.stringify(f), now),
+        ),
         d
           .prepare('UPDATE profiles SET active_workspace=? WHERE user_id=?')
           .bind(id, u.userId),
@@ -374,12 +440,20 @@ export async function POST(req: Request) {
       await d.batch([
         d.prepare('DELETE FROM loads WHERE workspace_id=?').bind(ws),
         d.prepare('DELETE FROM plans WHERE workspace_id=?').bind(ws),
+        d.prepare('DELETE FROM fuel WHERE workspace_id=?').bind(ws),
         ...seedLoads().map((l) =>
           d
             .prepare(
               'INSERT INTO loads (id,workspace_id,data,version,updated) VALUES (?,?,?,1,?)',
             )
             .bind(l.id, ws, JSON.stringify(l), now),
+        ),
+        ...seedFuel(seedLoads()).map((f) =>
+          d
+            .prepare(
+              'INSERT INTO fuel (id,workspace_id,data,updated) VALUES (?,?,?,?)',
+            )
+            .bind(f.id, ws, JSON.stringify(f), now),
         ),
       ]);
     } else if (action === 'savePlan') {

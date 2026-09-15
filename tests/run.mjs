@@ -7,6 +7,8 @@ const compile = spawnSync(
   [
     'lib/model.ts',
     'lib/validation.ts',
+    'lib/hos.ts',
+    'lib/ifta.ts',
     '--outDir',
     'work/model',
     '--module',

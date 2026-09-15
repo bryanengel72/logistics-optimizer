@@ -42,6 +42,18 @@ export const loads = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.workspaceId, t.id] })],
 );
+export const fuel = sqliteTable(
+  'fuel',
+  {
+    id: text('id').notNull(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    data: text('data').notNull(),
+    updated: text('updated').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.workspaceId, t.id] })],
+);
 export const plans = sqliteTable('plans', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id')

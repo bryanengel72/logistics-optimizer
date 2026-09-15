@@ -1532,3 +1532,45 @@ textarea::placeholder {
     transition-duration: 0.01ms !important;
   }
 }
+
+.callout.amber {
+  background: #fbf3e4;
+  border-color: #ecd9b3;
+  color: #7a4f0b;
+}
+.callout.amber svg {
+  color: #a66a11;
+}
+.hos-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+}
+.hos-grid .field span {
+  font-size: 12px;
+}
+.hos-grid .field input {
+  padding-left: 8px;
+  padding-right: 4px;
+}
+.bell-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #a66a11;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+@media (max-width: 767px) {
+  .hos-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
